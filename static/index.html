@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Mind - 思维导图</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/js/simpleMindMap.esm.min.css">
+</head>
+<body>
+    <!-- 顶部工具栏 -->
+    <div class="toolbar" id="toolbar">
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-new" title="新建">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/></svg>
+                <span class="toolbar-label">新建</span>
+            </button>
+            <button class="toolbar-btn" id="btn-save" title="保存">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" fill="currentColor"/></svg>
+                <span class="toolbar-label">保存</span>
+            </button>
+            <button class="toolbar-btn" id="btn-open" title="打开">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" fill="currentColor"/></svg>
+                <span class="toolbar-label">打开</span>
+            </button>
+            <button class="toolbar-btn" id="btn-import" title="导入">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" fill="currentColor"/></svg>
+                <span class="toolbar-label">导入</span>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-undo" title="撤销 (Ctrl+Z)">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12.5 8c-2.65 0-5.05 1-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" fill="currentColor"/></svg>
+            </button>
+            <button class="toolbar-btn" id="btn-redo" title="重做 (Ctrl+Shift+Z)">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M18.4 10.6C16.55 9 14.15 8 11.5 8 6.85 8 2.92 11.03 1.54 15.22l2.37.78C3.95 12.81 6.96 10.5 11.5 10.5c1.96 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z" fill="currentColor"/></svg>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn active" data-layout="logicalStructure" title="逻辑结构图">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 3h8v8H3V3zm0 10h8v8H3v-8zm10-10h8v8h-8V3zm0 10h8v8h-8v-8z" fill="currentColor"/></svg>
+            </button>
+            <button class="toolbar-btn" data-layout="mindMap" title="思维导图">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 5v4h8V5H3zm0 10h4v4H3v-4zm6 0h4v4H9v-4zm6 0h4v4h-4v-4zm0-10h4v4h-4V5z" fill="currentColor"/></svg>
+            </button>
+            <button class="toolbar-btn" data-layout="organizationStructure" title="组织结构图">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <button class="toolbar-btn" data-layout="catalogOrganization" title="目录组织图">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 4h16v2H4V4zm0 4h16v2H4V8zm0 4h16v2H4v-2zm0 4h10v2H4v-2z" fill="currentColor"/></svg>
+            </button>
+            <button class="toolbar-btn" data-layout="timeline" title="时间轴">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z" fill="currentColor"/></svg>
+            </button>
+            <button class="toolbar-btn" data-layout="fishbone" title="鱼骨图">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M2 12h20M6 8l-4 4 4 4M18 8l4 4-4 4M10 12h4M12 10v4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-zoom-out" title="缩小">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M19 13H5v-2h14v2z" fill="currentColor"/></svg>
+            </button>
+            <span class="toolbar-zoom-text" id="zoom-text">100%</span>
+            <button class="toolbar-btn" id="btn-zoom-in" title="放大">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/></svg>
+            </button>
+            <button class="toolbar-btn" id="btn-fit" title="适应画布">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 4h7v2H6v5H4V4zm16 0v7h-2V6h-5V4h7zM4 20h7v-2H6v-5H4v7zm16 0v-7h-2v5h-5v2h7z" fill="currentColor"/></svg>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-theme" title="主题">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10c.55 0 1-.45 1-1 0-.28-.11-.53-.29-.71-.18-.18-.29-.43-.29-.71 0-.55.45-1 1-1H16c3.31 0 6-2.69 6-6 0-4.96-4.49-9-10-9zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 8 6.5 8 8 8.67 8 9.5 7.33 11 6.5 11zm3-4C8.67 7 8 6.33 8 5.5S8.67 4 9.5 4s1.5.67 1.5 1.5S10.33 7 9.5 7zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 4 14.5 4s1.5.67 1.5 1.5S15.33 7 14.5 7zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 8 17.5 8s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z" fill="currentColor"/></svg>
+            </button>
+            <button class="toolbar-btn" id="btn-style" title="样式">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" fill="currentColor"/></svg>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-add-child" title="添加子节点 (Tab)">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M15 12h-3v3h-2v-3H7v-2h3V7h2v3h3v2zm-3-9C6.48 3 2 7.48 2 13s4.48 10 10 10 10-4.48 10-10S17.52 3 12 3z" fill="currentColor"/></svg>
+                <span class="toolbar-label">子节点</span>
+            </button>
+            <button class="toolbar-btn" id="btn-add-sibling" title="添加兄弟节点 (Enter)">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M22 12l-4-4v3H3v2h15v3l4-4z" fill="currentColor"/></svg>
+                <span class="toolbar-label">兄弟节点</span>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-search" title="搜索 (Ctrl+F)">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor"/></svg>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-add-association" title="添加关系线">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h15v-2H3v2z" fill="currentColor"/></svg>
+                <span class="toolbar-label">关系</span>
+            </button>
+            <button class="toolbar-btn" id="btn-add-summary" title="添加概要">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2z" fill="currentColor"/></svg>
+                <span class="toolbar-label">概要</span>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-delete-node" title="删除节点 (Delete)">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg>
+                <span class="toolbar-label">删除</span>
+            </button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button class="toolbar-btn" id="btn-export" title="导出">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path d="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5 5-5-5 1.41-1.41L11 12.67V3h2v9.67z" fill="currentColor"/></svg>
+                <span class="toolbar-label">导出</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <div class="main-container">
+        <!-- 左侧面板 -->
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-tabs">
+                <button class="sidebar-tab active" data-tab="file-list">文件</button>
+                <button class="sidebar-tab" data-tab="outline">大纲</button>
+                <button class="sidebar-tab" data-tab="icons">图标</button>
+            </div>
+            <div class="sidebar-content">
+                <div class="sidebar-pane active" id="pane-file-list">
+                    <div class="file-list-header">
+                        <span>我的文件</span>
+                    </div>
+                    <div class="file-list" id="file-list"></div>
+                </div>
+                <div class="sidebar-pane" id="pane-outline">
+                    <div class="outline-tree" id="outline-tree">
+                        <p class="empty-hint">打开一个思维导图查看大纲</p>
+                    </div>
+                </div>
+                <div class="sidebar-pane" id="pane-icons">
+                    <div class="icons-section">
+                        <div class="icons-group-label">优先级</div>
+                        <div class="icons-grid" data-type="priority"></div>
+                    </div>
+                    <div class="icons-section">
+                        <div class="icons-group-label">进度</div>
+                        <div class="icons-grid" data-type="progress"></div>
+                    </div>
+                    <div class="icons-section">
+                        <div class="icons-group-label">图标</div>
+                        <div class="icons-grid" data-type="icon"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 画布 -->
+        <div class="canvas-wrapper">
+            <div class="canvas-container" id="mindMapContainer"></div>
+        </div>
+
+        <!-- 右侧属性面板 -->
+        <div class="property-panel" id="property-panel">
+            <div class="property-header">节点属性</div>
+            <div class="property-body" id="property-body">
+                <p class="empty-hint">选中节点查看属性</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="statusbar" id="statusbar">
+        <span id="status-node-count">节点: 0</span>
+        <span id="status-layout">逻辑结构图</span>
+    </div>
+
+    <!-- 文件列表弹出窗 -->
+    <div class="modal-overlay" id="modal-open" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <span>打开文件</span>
+                <button class="modal-close" id="modal-open-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="open-file-list" id="open-file-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-open-cancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主题选择弹出窗 -->
+    <div class="modal-overlay" id="modal-theme" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <span>选择主题</span>
+                <button class="modal-close" id="modal-theme-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="theme-grid" id="theme-grid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 搜索弹出窗 -->
+    <div class="modal-overlay" id="modal-search" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <span>搜索节点</span>
+                <button class="modal-close" id="modal-search-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="输入关键词搜索..." class="search-input" autofocus>
+                    <div class="search-controls">
+                        <span id="search-count" class="search-count">0/0</span>
+                        <button class="btn btn-sm" id="search-prev" title="上一个">▲</button>
+                        <button class="btn btn-sm" id="search-next" title="下一个">▼</button>
+                    </div>
+                </div>
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-search-cancel">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 备注编辑弹出窗 -->
+    <div class="modal-overlay" id="modal-note" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <span>编辑备注</span>
+                <button class="modal-close" id="modal-note-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="note-input" class="note-input" placeholder="输入备注内容..." rows="8"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-note-cancel">取消</button>
+                <button class="btn btn-primary" id="modal-note-save">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 超链接编辑弹出窗 -->
+    <div class="modal-overlay" id="modal-link" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <span>编辑超链接</span>
+                <button class="modal-close" id="modal-link-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">链接地址</label>
+                    <input type="url" id="link-input" class="search-input" placeholder="https://..." autofocus>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">链接文字</label>
+                    <input type="text" id="link-text-input" class="search-input" placeholder="链接文字（可选）">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-link-remove">移除链接</button>
+                <button class="btn btn-secondary" id="modal-link-cancel">取消</button>
+                <button class="btn btn-primary" id="modal-link-save">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导出弹出窗 -->
+    <div class="modal-overlay" id="modal-export" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <span>导出</span>
+                <button class="modal-close" id="modal-export-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="export-list">
+                    <button class="export-item" data-format="png">
+                        <span class="export-icon">🖼️</span>
+                        <span class="export-info">
+                            <span class="export-name">PNG 图片</span>
+                            <span class="export-desc">导出为高清图片</span>
+                        </span>
+                    </button>
+                    <button class="export-item" data-format="svg">
+                        <span class="export-icon">📐</span>
+                        <span class="export-info">
+                            <span class="export-name">SVG 矢量图</span>
+                            <span class="export-desc">可缩放的矢量格式</span>
+                        </span>
+                    </button>
+                    <button class="export-item" data-format="pdf">
+                        <span class="export-icon">📄</span>
+                        <span class="export-info">
+                            <span class="export-name">PDF 文档</span>
+                            <span class="export-desc">便携式文档格式</span>
+                        </span>
+                    </button>
+                    <button class="export-item" data-format="markdown">
+                        <span class="export-icon">📝</span>
+                        <span class="export-info">
+                            <span class="export-name">Markdown</span>
+                            <span class="export-desc">导出为 Markdown 大纲</span>
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导入弹出窗 -->
+    <div class="modal-overlay" id="modal-import" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <span>导入文件</span>
+                <button class="modal-close" id="modal-import-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="import-tabs">
+                    <button class="import-tab active" data-import-type="file">上传文件</button>
+                    <button class="import-tab" data-import-type="markdown">Markdown 文本</button>
+                </div>
+                <div class="import-pane active" id="import-file-pane">
+                    <div class="import-dropzone" id="import-dropzone">
+                        <p>点击选择或拖拽文件到这里</p>
+                        <p class="import-hint">支持 .xmind, .mm, .md 格式</p>
+                        <input type="file" id="import-file-input" accept=".xmind,.mm,.md" style="display:none">
+                        <button class="btn btn-primary" id="import-file-btn">选择文件</button>
+                    </div>
+                    <div id="import-status" class="import-status"></div>
+                </div>
+                <div class="import-pane" id="import-markdown-pane">
+                    <textarea id="import-markdown-input" class="note-input" placeholder="粘贴 Markdown 内容...
+
+支持格式:
+# 标题1
+## 标题2
+### 标题3
+- 列表项1
+- 列表项2" rows="10"></textarea>
+                    <div style="margin-top:8px;text-align:right">
+                        <button class="btn btn-primary" id="import-markdown-btn">导入</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/simpleMindMap.umd.min.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
