@@ -1742,7 +1742,8 @@ function addSummary() {
 
 // ============ Sidebar Tabs ============
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
+    tab.addEventListener('mousedown', (e) => {
+        e.preventDefault();
         document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.sidebar-pane').forEach(p => p.classList.remove('active'));
         tab.classList.add('active');
