@@ -1741,15 +1741,29 @@ function addSummary() {
 }
 
 // ============ Sidebar Tabs ============
-// 挂在 document 捕获阶段，确保在思维导图库之前拦截（库会在 document 上绑定全局鼠标事件）
+let _tabJustSwitched = false;
+
+// 在捕获阶段提前切换标签页，确保先于思维导图库处理
 document.addEventListener('mousedown', (e) => {
     const tab = e.target.closest('.sidebar-tab');
-    if (!tab) return;
-    e.stopPropagation();
+    if (!tab) {
+        _tabJustSwitched = false;
+        return;
+    }
     document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.sidebar-pane').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+    _tabJustSwitched = true;
+}, true);
+
+// 标签切换后，吃掉紧随的 click 事件，防止误点击新出现的面板内容（如文件列表项）
+document.querySelector('.sidebar').addEventListener('click', (e) => {
+    if (_tabJustSwitched) {
+        _tabJustSwitched = false;
+        e.stopPropagation();
+        e.preventDefault();
+    }
 }, true);
 
 // ============ Icons Panel ============
