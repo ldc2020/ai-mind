@@ -1741,29 +1741,25 @@ function addSummary() {
 }
 
 // ============ Sidebar Tabs ============
-let _tabJustSwitched = false;
+let _tabSwitchTimer = 0;
 
-// 在捕获阶段提前切换标签页，确保先于思维导图库处理
+// 在捕获阶段提前切换标签页，确保先于思维导图库的全局鼠标事件
 document.addEventListener('mousedown', (e) => {
     const tab = e.target.closest('.sidebar-tab');
-    if (!tab) {
-        _tabJustSwitched = false;
-        return;
-    }
+    if (!tab) return;
+
     document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.sidebar-pane').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
-    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
-    _tabJustSwitched = true;
-}, true);
+    const pane = document.getElementById('pane-' + tab.dataset.tab);
+    pane.classList.add('active');
 
-// 标签切换后，吃掉紧随的 click 事件，防止误点击新出现的面板内容（如文件列表项）
-document.querySelector('.sidebar').addEventListener('click', (e) => {
-    if (_tabJustSwitched) {
-        _tabJustSwitched = false;
-        e.stopPropagation();
-        e.preventDefault();
-    }
+    // 切换后短暂禁用面板内的点击，防止同一鼠标动作误触面板内容
+    clearTimeout(_tabSwitchTimer);
+    pane.style.pointerEvents = 'none';
+    _tabSwitchTimer = setTimeout(() => {
+        pane.style.pointerEvents = '';
+    }, 350);
 }, true);
 
 // ============ Icons Panel ============
