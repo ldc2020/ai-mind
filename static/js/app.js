@@ -304,6 +304,23 @@ function initMindMap(data) {
 }
 
 // ============ File Operations ============
+async function autoSave() {
+    if (!isDirty || !mindMap) return;
+    const data = mindMap.getData();
+    if (currentUid) {
+        try {
+            await fetch(`/api/mindmaps/${currentUid}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: data }),
+            });
+            isDirty = false;
+        } catch (err) {
+            console.error('自动保存失败:', err);
+        }
+    }
+}
+
 async function loadFileList() {
     try {
         const res = await fetch('/api/mindmaps');
@@ -316,7 +333,7 @@ async function loadFileList() {
 }
 
 async function newMindMap() {
-    if (isDirty && !confirm('当前导图未保存，是否继续？')) return;
+    await autoSave();
     try {
         const res = await fetch('/api/mindmaps/new', { method: 'POST' });
         const data = await res.json();
@@ -368,7 +385,7 @@ async function saveMindMap() {
 }
 
 async function loadMindMap(uid) {
-    if (isDirty && !confirm('当前导图未保存，是否继续？')) return;
+    await autoSave();
     try {
         const res = await fetch(`/api/mindmaps/${uid}`);
         const data = await res.json();
@@ -1658,7 +1675,7 @@ function parseMarkdown(text) {
 }
 
 async function applyImportedData(data) {
-    if (isDirty && !confirm('当前导图未保存，是否覆盖？')) return;
+    await autoSave();
     if (mindMap) {
         mindMap.destroy();
     }

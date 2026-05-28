@@ -9,14 +9,17 @@ AI Mind - A web-based mind mapping application inspired by XMind. Backend is Pyt
 ## Dev Commands
 
 ```bash
-# Install dependencies
+# 安装依赖
 pip install -r requirements.txt
 
-# Start the dev server (hot-reload enabled via uvicorn --reload)
+# 启动服务（使用 ai-mind.exe 启动可让任务管理器显示 "ai-mind" 而非 "python"）
+ai-mind main.py
+
+# 如果 ai-mind 命令不可用，回退到 python
 python main.py
 
-# Open in browser
-# http://127.0.0.1:8000
+# 浏览器访问
+# http://127.0.0.1:8001
 ```
 
 ## Architecture
