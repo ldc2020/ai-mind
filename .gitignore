@@ -19,5 +19,10 @@ data/
 .DS_Store
 Thumbs.db
 
+# Debug files
+debug-*.js
+verification*.png
+package-lock.json
+
 # Claude
 .claude/
