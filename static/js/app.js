@@ -10,6 +10,43 @@ let mindMap = null;
 let currentUid = null;
 let isDirty = false;
 
+// 自定义 undo/redo 栈（库的 back/forward 不可靠）
+let _undoStack = [];
+let _redoStack = [];
+const _MAX_UNDO = 50;
+
+function pushUndo() {
+    if (!mindMap) return;
+    const data = JSON.parse(JSON.stringify(mindMap.getData()));
+    _undoStack.push(data);
+    if (_undoStack.length > _MAX_UNDO) _undoStack.shift();
+    _redoStack = [];
+}
+
+function undo() {
+    if (!mindMap || _undoStack.length === 0) return;
+    const current = JSON.parse(JSON.stringify(mindMap.getData()));
+    _redoStack.push(current);
+    const prev = _undoStack.pop();
+    mindMap.setData(prev);
+    mindMap.render();
+    isDirty = true;
+    updateStatusBar();
+    updateOutline();
+}
+
+function redo() {
+    if (!mindMap || _redoStack.length === 0) return;
+    const current = JSON.parse(JSON.stringify(mindMap.getData()));
+    _undoStack.push(current);
+    const next = _redoStack.pop();
+    mindMap.setData(next);
+    mindMap.render();
+    isDirty = true;
+    updateStatusBar();
+    updateOutline();
+}
+
 // 追踪当前选中节点的引用（直接从库事件获取）
 let activeNodeCache = [];
 // 暴露给外部（Playwright 测试等），通过 getter 保持引用同步
@@ -1820,12 +1857,8 @@ document.getElementById('btn-open').addEventListener('click', () => {
 });
 
 // Undo/Redo
-document.getElementById('btn-undo').addEventListener('click', () => {
-    if (mindMap) mindMap.command.back();
-});
-document.getElementById('btn-redo').addEventListener('click', () => {
-    if (mindMap) mindMap.command.forward();
-});
+document.getElementById('btn-undo').addEventListener('click', undo);
+document.getElementById('btn-redo').addEventListener('click', redo);
 
 // Zoom
 document.getElementById('btn-zoom-out').addEventListener('click', () => {
@@ -1863,7 +1896,7 @@ document.getElementById('btn-style').addEventListener('click', () => {
     }
 });
 
-// Add child node - 通过数据树操作添加子节点
+// Add child node
 document.getElementById('btn-add-child').addEventListener('click', () => {
     if (!mindMap) return;
     const nodes = activeNodeCache.length > 0 ? activeNodeCache :
@@ -1872,26 +1905,11 @@ document.getElementById('btn-add-child').addEventListener('click', () => {
         showToast('请先选中一个节点');
         return;
     }
-    const parentNode = nodes[0];
-    const parentUid = parentNode.getData('uid');
-    const data = mindMap.getData();
-    const parentData = findNodeInData(data, parentUid);
-    if (!parentData) {
-        showToast('找不到父节点');
-        return;
-    }
-    if (!parentData.children) parentData.children = [];
-    parentData.children.push({
-        data: { text: '新节点', expand: true },
-        children: [],
-    });
-    mindMap.setData(data);
-    mindMap.render();
-    mindMap.command.addHistory();
-    isDirty = true;
+    pushUndo();
+    mindMap.execCommand('INSERT_CHILD_NODE');
 });
 
-// Add sibling node - 通过数据树操作添加兄弟节点
+// Add sibling node
 document.getElementById('btn-add-sibling').addEventListener('click', () => {
     if (!mindMap) return;
     const nodes = activeNodeCache.length > 0 ? activeNodeCache :
@@ -1901,27 +1919,12 @@ document.getElementById('btn-add-sibling').addEventListener('click', () => {
         return;
     }
     const node = nodes[0];
-    const parent = node.parent;
-    if (!parent) {
+    if (!node.parent) {
         showToast('根节点不能添加兄弟节点');
         return;
     }
-    const parentUid = parent.getData('uid');
-    const data = mindMap.getData();
-    const parentData = findNodeInData(data, parentUid);
-    if (!parentData) {
-        showToast('找不到父节点');
-        return;
-    }
-    if (!parentData.children) parentData.children = [];
-    parentData.children.push({
-        data: { text: '新节点', expand: true },
-        children: [],
-    });
-    mindMap.setData(data);
-    mindMap.render();
-    mindMap.command.addHistory();
-    isDirty = true;
+    pushUndo();
+    mindMap.execCommand('INSERT_NODE');
 });
 
 // Delete node
@@ -2141,14 +2144,15 @@ document.addEventListener('keydown', (e) => {
     // Ctrl+Z - 撤销
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey && !isInput) {
         e.preventDefault();
-        if (mindMap) mindMap.command.back();
+        pushUndo();
+        undo();
         return;
     }
 
     // Ctrl+Shift+Z or Ctrl+Y - 重做
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && !isInput) {
         e.preventDefault();
-        if (mindMap) mindMap.command.forward();
+        redo();
         return;
     }
 
