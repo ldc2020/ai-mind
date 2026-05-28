@@ -539,8 +539,7 @@ function updateOutline() {
             const uid = el.dataset.uid;
             const node = getAllNodes().find(n => n.getData('uid') === uid);
             if (node) {
-                const expanded = node.getData('expand');
-                mindMap.execCommand('EXPAND_NODE', uid, !expanded);
+                mindMap.renderer.toggleNodeExpand(node);
             }
         });
     });
@@ -1822,10 +1821,10 @@ document.getElementById('btn-open').addEventListener('click', () => {
 
 // Undo/Redo
 document.getElementById('btn-undo').addEventListener('click', () => {
-    if (mindMap) mindMap.execCommand('UNDO');
+    if (mindMap) mindMap.command.back();
 });
 document.getElementById('btn-redo').addEventListener('click', () => {
-    if (mindMap) mindMap.execCommand('REDO');
+    if (mindMap) mindMap.command.forward();
 });
 
 // Zoom
@@ -2142,14 +2141,14 @@ document.addEventListener('keydown', (e) => {
     // Ctrl+Z - 撤销
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey && !isInput) {
         e.preventDefault();
-        if (mindMap) mindMap.execCommand('UNDO');
+        if (mindMap) mindMap.command.back();
         return;
     }
 
     // Ctrl+Shift+Z or Ctrl+Y - 重做
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && !isInput) {
         e.preventDefault();
-        if (mindMap) mindMap.execCommand('REDO');
+        if (mindMap) mindMap.command.forward();
         return;
     }
 
