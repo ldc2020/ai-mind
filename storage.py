@@ -34,7 +34,7 @@ def list_mindmaps():
                 })
             except Exception:
                 continue
-    maps.sort(key=lambda m: m["updated_at"], reverse=True)
+    maps.sort(key=lambda m: m["created_at"], reverse=True)
     return maps
 
 def load_mindmap(uid: str):
