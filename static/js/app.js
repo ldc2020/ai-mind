@@ -454,7 +454,7 @@ function renderFileList(mindmaps) {
                 <svg viewBox="0 0 24 24" width="14" height="14"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" fill="currentColor"/></svg>
             </div>
             <div class="file-info">
-                <div class="file-name">${escapeHtml(m.title)}</div>
+                <div class="file-name">${stripHtml(m.title)}</div>
                 <div class="file-date">${new Date(m.updated_at).toLocaleString()}</div>
             </div>
             <button class="file-delete" data-uid="${m.id}" title="删除">&times;</button>
@@ -489,7 +489,7 @@ function renderOpenFileList(mindmaps) {
                 <svg viewBox="0 0 24 24" width="14" height="14"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" fill="currentColor"/></svg>
             </div>
             <div class="file-info">
-                <div class="file-name">${escapeHtml(m.title)}</div>
+                <div class="file-name">${stripHtml(m.title)}</div>
                 <div class="file-date">${new Date(m.updated_at).toLocaleString()}</div>
             </div>
         </div>
@@ -559,7 +559,7 @@ function buildOutlineHTML(data, depth = 0) {
     } else {
         html += `<span class="outline-toggle" style="visibility:hidden">▶</span>`;
     }
-    html += escapeHtml(text);
+    html += stripHtml(text);
     html += `</div>`;
     if (hasChildren && expand) {
         html += `<ul>`;
@@ -577,6 +577,13 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function stripHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.innerHTML = text;
+    return div.textContent.trim();
 }
 
 // ============ Property Panel (Style, Tags, Notes, Links) ============
@@ -1829,15 +1836,8 @@ document.getElementById('btn-zoom-in').addEventListener('click', () => {
     if (mindMap) mindMap.view.enlarge();
 });
 document.getElementById('btn-fit').addEventListener('click', () => {
-    if (mindMap) {
-        mindMap.view.resetTransform();
-        setTimeout(() => {
-            const center = mindMap.renderer.getNodeCenter(getAllNodes()[0]);
-            if (center) {
-                mindMap.view.moveNodeToCenter(center);
-            }
-        }, 100);
-    }
+    if (!mindMap) return;
+    mindMap.view.fit();
 });
 
 // Theme
@@ -2094,7 +2094,7 @@ function showToast(msg) {
 // ============ Theme ============
 function renderThemeGrid() {
     const grid = document.getElementById('theme-grid');
-    const currentTheme = mindMap ? mindMap.getData().theme || 'default' : 'default';
+    const currentTheme = mindMap ? (mindMap.opt.theme || mindMap.getData().theme || 'default') : 'default';
     grid.innerHTML = THEMES.map(t => `
         <div class="theme-item ${t.key === currentTheme ? 'active' : ''}" data-theme="${t.key}">
             <div class="theme-preview" style="background:${t.color}"></div>
@@ -2107,6 +2107,7 @@ function renderThemeGrid() {
             const theme = item.dataset.theme;
             if (mindMap) {
                 mindMap.setTheme(theme);
+                mindMap.render();
             }
             grid.querySelectorAll('.theme-item').forEach(i => i.classList.remove('active'));
             item.classList.add('active');

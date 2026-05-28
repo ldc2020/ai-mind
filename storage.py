@@ -1,9 +1,16 @@
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 
 DATA_DIR = "data"
+
+def _strip_html(text):
+    """去除HTML标签"""
+    if not text:
+        return ""
+    return re.sub(r'<[^>]+>', '', text).strip()
 
 def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -19,9 +26,7 @@ def list_mindmaps():
                 with open(filepath, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 uid = fname.replace(".json", "")
-                root_text = ""
-                if "data" in data and "text" in data["data"]:
-                    root_text = data["data"]["text"]
+                root_text = _strip_html(data.get("data", {}).get("text", ""))
                 maps.append({
                     "id": uid,
                     "title": root_text or uid,
