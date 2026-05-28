@@ -1741,15 +1741,16 @@ function addSummary() {
 }
 
 // ============ Sidebar Tabs ============
-document.querySelectorAll('.sidebar-tab').forEach(tab => {
-    tab.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.sidebar-pane').forEach(p => p.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
-    });
-});
+// 挂在 document 捕获阶段，确保在思维导图库之前拦截（库会在 document 上绑定全局鼠标事件）
+document.addEventListener('mousedown', (e) => {
+    const tab = e.target.closest('.sidebar-tab');
+    if (!tab) return;
+    e.stopPropagation();
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.sidebar-pane').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+}, true);
 
 // ============ Icons Panel ============
 function initIconsPanel() {
