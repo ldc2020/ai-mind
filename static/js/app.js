@@ -131,6 +131,53 @@ const THEMES = [
     { key: 'minions', label: '小黄人', color: '#fcdb03' },
 ];
 
+// 12套主题完整配色（库的 setTheme 不生效，手动注入 setThemeConfig）
+function _makeThemeConfig(main, bg, rootText, nodeText, secondFill, secondBorder) {
+    return {
+        backgroundColor: bg,
+        lineColor: main,
+        root: {
+            fillColor: main, color: rootText, fontSize: 16, fontWeight: 'bold',
+            fontStyle: 'normal', borderColor: 'transparent', borderWidth: 0,
+            borderDasharray: 'none', borderRadius: 5, textDecoration: 'none',
+            hoverRectColor: '', hoverRectRadius: 5, textAlign: 'left',
+        },
+        second: {
+            fillColor: secondFill, color: '#565656', fontSize: 16,
+            borderColor: secondBorder || main, borderWidth: 1,
+            borderDasharray: 'none', borderRadius: 5, textDecoration: 'none',
+            marginX: 100, marginY: 40,
+        },
+        node: {
+            fillColor: 'transparent', color: nodeText, fontSize: 14,
+            borderColor: 'transparent', borderWidth: 0,
+            borderDasharray: 'none', borderRadius: 5, textDecoration: 'none',
+            marginX: 50, marginY: 0,
+        },
+        generalization: {
+            fillColor: secondFill, color: '#565656', fontSize: 16,
+            borderColor: secondBorder || main, borderWidth: 1,
+            borderDasharray: 'none', borderRadius: 5, textDecoration: 'none',
+            marginX: 100, marginY: 40,
+        },
+    };
+}
+
+const THEME_CONFIGS = {
+    default:       _makeThemeConfig('#549688', '#fafafa', '#fff',   '#6a6d6c', '#fff', '#549688'),
+    classic:       _makeThemeConfig('#f5a623', '#fdfdf0', '#fff',   '#6a6d6c', '#fff', '#f5a623'),
+    blue:          _makeThemeConfig('#4a90d9', '#f6fafe', '#fff',   '#6a6d6c', '#fff', '#4a90d9'),
+    green:         _makeThemeConfig('#7ed321', '#f9fdf5', '#fff',   '#6a6d6c', '#fff', '#7ed321'),
+    pink:          _makeThemeConfig('#f78da7', '#fefafb', '#fff',   '#6a6d6c', '#fff', '#f78da7'),
+    purple:        _makeThemeConfig('#ab8ce4', '#faf7fe', '#fff',   '#6a6d6c', '#fff', '#ab8ce4'),
+    dark:          _makeThemeConfig('#2c2c2e', '#1e1e20', '#fff',   '#aaaaaa', '#2c2c2e', '#555'),
+    simple:        _makeThemeConfig('#c8c8cc', '#ffffff', '#333',   '#666666', '#ffffff', '#c8c8cc'),
+    light:         _makeThemeConfig('#e8a860', '#fffef5', '#fff',   '#6a6d6c', '#fff', '#e8a860'),
+    snow:          _makeThemeConfig('#88c8f0', '#f6fbfe', '#333',   '#6a6d6c', '#fff', '#88c8f0'),
+    warm:          _makeThemeConfig('#e8a860', '#fffdf5', '#fff',   '#6a6d6c', '#fff', '#e8a860'),
+    minions:       _makeThemeConfig('#fcdb03', '#fffef5', '#333',   '#6a6d6c', '#fff', '#fcdb03'),
+};
+
 const LAYOUT_LABELS = {
     logicalStructure: '逻辑结构图',
     logicalStructureLeft: '逻辑结构图(左)',
@@ -2108,8 +2155,12 @@ function renderThemeGrid() {
         item.addEventListener('click', () => {
             const theme = item.dataset.theme;
             if (mindMap) {
+                const cfg = THEME_CONFIGS[theme];
+                if (cfg) {
+                    mindMap.setThemeConfig(cfg);
+                    mindMap.render();
+                }
                 mindMap.setTheme(theme);
-                mindMap.render();
             }
             grid.querySelectorAll('.theme-item').forEach(i => i.classList.remove('active'));
             item.classList.add('active');
