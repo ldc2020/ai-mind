@@ -3521,12 +3521,12 @@ async function init() {
     initIconsPanel();
     renderThemeGrid();
 
-    // 每5分钟自动保存
+    // 每1分钟自动保存
     setInterval(() => {
         if (isDirty && mindMap) {
             autoSave();
         }
-    }, 5 * 60 * 1000);
+    }, 60 * 1000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
