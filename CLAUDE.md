@@ -63,7 +63,9 @@ The frontend is organized in these functional sections:
 - **State**: `mindMap` instance, `currentUid`, `isDirty` flag
 - **Init**: Loads first saved mind map on DOMContentLoaded, or creates default
 - **File ops**: `newMindMap()`, `saveMindMap()`, `loadMindMap()`, `deleteMindMap()` — all async, talk to /api/*
+- **Auto-save**: `autoSave()` 每分钟后台静默保存（无 toast），`saveMindMap()` 手动保存（有 toast + 刷新列表）
 - **Mind map init**: `initMindMap(data)` — creates MindMap instance, registers event listeners (data_change, node_active, view_data_change, draw_click)
+- **Floating nodes**: `floatingNodes[]` 自由浮动节点系统，支持拖拽、内联编辑、关系线
 - **UI updates**: `updateStatusBar()`, `updateZoomText()`, `updateOutline()`, `updatePropertyPanel()`
 - **Toolbar**: Layout buttons (data-layout), zoom (+/-/fit), undo/redo, theme, style toggle, export PNG
 - **Sidebar**: 3 tabs (file list / outline / icons), each with its own pane
