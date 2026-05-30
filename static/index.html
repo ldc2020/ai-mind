@@ -180,6 +180,7 @@
 
     <!-- 底部状态栏 -->
     <div class="statusbar" id="statusbar">
+        <button class="btn btn-sm" id="btn-settings" title="设置" style="border: none; background: transparent; padding: 2px 6px; cursor: pointer;">⚙️ 设置</button>
         <span id="status-node-count">节点: 0</span>
         <span id="status-layout">逻辑结构图</span>
     </div>
@@ -241,7 +242,14 @@
     <div class="modal-overlay" id="modal-note" style="display:none">
         <div class="modal" style="width: 600px; max-width: 90vw;">
             <div class="modal-header">
-                <span>编辑备注</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span>编辑备注</span>
+                    <button id="btn-ai-format" title="AI排版" style="background: var(--accent-light); color: var(--accent); border: none; border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 12px; display: flex; align-items: center; transition: all 0.2s;">✨ AI排版</button>
+                    <div id="ai-format-box" style="display: none; align-items: center; border: 1px solid var(--accent); border-radius: 4px; padding: 2px 6px; background: #fff; max-width: 300px; flex: 1; transition: width 0.2s;">
+                        <input type="text" id="ai-format-input" placeholder="输入简短排版规则..." autocomplete="off" data-lpignore="true" style="border: none; outline: none; font-size: 12px; flex: 1; min-width: 150px; color: var(--text-primary); background: transparent;">
+                        <button id="btn-ai-format-submit" style="background: transparent; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0 4px;">确定</button>
+                    </div>
+                </div>
                 <button class="modal-close" id="modal-note-close">&times;</button>
             </div>
             <div class="modal-body" style="padding: 0;">
@@ -362,8 +370,39 @@
         </div>
     </div>
 
+    <!-- 设置弹出窗 -->
+    <div class="modal-overlay" id="modal-settings" style="display:none">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <span>设置</span>
+                <button class="modal-close" id="modal-settings-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form autocomplete="off" onsubmit="return false;">
+                    <div class="form-group">
+                        <label class="form-label">AI Base URL</label>
+                        <input type="url" id="ai-base-url-input" class="search-input" placeholder="https://api.openai.com/v1" autocomplete="off" data-lpignore="true">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">AI API Key</label>
+                        <input type="password" id="ai-api-key-input" class="search-input" placeholder="sk-..." autocomplete="new-password" data-lpignore="true">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">AI 模型 (Model)</label>
+                        <input type="text" id="ai-model-input" class="search-input" placeholder="gpt-3.5-turbo" autocomplete="off" data-lpignore="true">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-settings-cancel">取消</button>
+                <button class="btn btn-primary" id="modal-settings-save">保存</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"></script>
     <script src="/static/js/simpleMindMap.umd.min.js"></script>
+    <script src="/static/js/ai.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

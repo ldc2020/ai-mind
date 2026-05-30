@@ -1750,8 +1750,22 @@ function openFloatNoteEditor(fn) {
     const note = fn.data.note || '';
     if (wangEditorInstance) {
         wangEditorInstance.setHtml(note);
+        setTimeout(() => {
+            initialNoteContentForCompare = wangEditorInstance.getHtml();
+        }, 100);
     }
     document.getElementById('modal-note-save').onclick = () => {
+        if (window.isAIGenerating) {
+            if (confirm('AI正在生成排版内容，确定要中断并保存当前内容吗？')) {
+                if (window.aiFormatController) {
+                    window.aiFormatController.abort();
+                }
+                window.isAIGenerating = false;
+            } else {
+                return;
+            }
+        }
+        
         let noteHtml = '';
         let plainText = '';
         if (wangEditorInstance) {
@@ -3301,12 +3315,43 @@ function initNoteEditorIfNeeded() {
         config: editorConfig,
         mode: 'default'
     });
+    
+    // 支持Tab键缩进
+    document.getElementById('editor-container').addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const menuKey = e.shiftKey ? 'delIndent' : 'indent';
+            
+            // wangEditor V5 触发菜单命令的推荐方式，或者通过模拟点击工具栏按钮
+            const toolbarEl = document.getElementById('editor-toolbar');
+            if (toolbarEl) {
+                // 查找菜单项 DOM，wangEditor V5 的菜单按钮可能包含内部的 <button>
+                const item = toolbarEl.querySelector(`[data-menu-key="${menuKey}"]`);
+                if (item) {
+                    const btn = item.querySelector('button') || item;
+                    // 先恢复编辑器焦点
+                    if (wangEditorInstance) {
+                        wangEditorInstance.focus();
+                    }
+                    btn.click();
+                    return;
+                }
+            }
+            
+            // fallback: 尝试通过内部 editor api 触发
+            if (wangEditorInstance && typeof wangEditorInstance.handleCommand === 'function') {
+                wangEditorInstance.handleCommand(menuKey);
+            }
+        }
+    }, true); // 使用捕获阶段
+
     const toolbarConfig = {
         toolbarKeys: [
             'bold', 'underline', 'italic', 'through', 'clearStyle',
             'color', 'bgColor', '|',
             'bulletedList', 'numberedList', '|',
-            'justifyLeft', 'justifyCenter', 'justifyRight'
+            'justifyLeft', 'justifyCenter', 'justifyRight', '|',
+            'indent', 'delIndent'
         ]
     };
     createToolbar({
@@ -3339,6 +3384,17 @@ function openNoteEditor(node) {
     }
 
     document.getElementById('modal-note-save').onclick = () => {
+        if (window.isAIGenerating) {
+            if (confirm('AI正在生成排版内容，确定要中断并保存当前内容吗？')) {
+                if (window.aiFormatController) {
+                    window.aiFormatController.abort();
+                }
+                window.isAIGenerating = false;
+            } else {
+                return;
+            }
+        }
+
         let noteHtml = '';
         let plainText = '';
         if (wangEditorInstance) {
@@ -3355,6 +3411,94 @@ function openNoteEditor(node) {
         showToast(finalNote ? '备注已保存' : '备注已移除');
     };
 }
+
+// AI排版逻辑
+document.getElementById('btn-ai-format').addEventListener('click', () => {
+    const box = document.getElementById('ai-format-box');
+    const input = document.getElementById('ai-format-input');
+    if (box.style.display === 'none') {
+        box.style.display = 'flex';
+        // 读取最后一次保存的排版规则作为默认内容
+        const lastRule = localStorage.getItem('ai_format_last_rule');
+        if (lastRule && !input.value) {
+            input.value = lastRule;
+        }
+        input.focus();
+    } else {
+        box.style.display = 'none';
+    }
+});
+
+document.getElementById('btn-ai-format-submit').addEventListener('click', async () => {
+    if (!window.aiService) return;
+    
+    const input = document.getElementById('ai-format-input');
+    const rule = input.value.trim();
+    if (!rule) {
+        showToast('请输入排版规则');
+        return;
+    }
+
+    if (!wangEditorInstance || !wangEditorInstance.getText().trim()) {
+        showToast('编辑器内容为空');
+        return;
+    }
+
+    // 记录最后一次使用的排版规则
+    localStorage.setItem('ai_format_last_rule', rule);
+
+    const htmlContent = wangEditorInstance.getHtml();
+    const btnSubmit = document.getElementById('btn-ai-format-submit');
+    
+    try {
+        btnSubmit.textContent = '处理中...';
+        btnSubmit.disabled = true;
+        window.isAIGenerating = true;
+        window.aiFormatController = new AbortController();
+
+        const systemPrompt = "你是一个专业的排版助手。请根据用户的排版规则，对提供的富文本(HTML格式)进行排版。请只返回排版后的HTML代码，不要包含任何额外的解释、说明或Markdown格式（如```html）。保持原有的内容意义不变，仅调整格式、结构和样式。注意：只能使用基础的 HTML 标签，如 <p>, <h1>-<h5>, <strong>, <b>, <em>, <i>, <u>, <s>, <span>, <ul>, <ol>, <li>, <blockquote> 等，可以通过 style 属性添加基础样式（如 color, background-color, text-align, padding, margin 等）。千万不要使用无法被基础富文本编辑器解析的复杂标签。";
+        const userMessage = `排版规则: ${rule}\n\n需要排版的内容:\n${htmlContent}`;
+
+        let result = await window.aiService.chatCompletion(systemPrompt, userMessage, window.aiFormatController.signal);
+        
+        // 净化 AI 返回的内容，防止包裹在 markdown 代码块中导致 wangEditor 解析崩溃
+        result = result.trim();
+        if (result.startsWith('```html')) {
+            result = result.replace(/^```html\n?/, '').replace(/\n?```$/, '');
+        } else if (result.startsWith('```')) {
+            result = result.replace(/^```\n?/, '').replace(/\n?```$/, '');
+        }
+
+        try {
+            wangEditorInstance.setHtml(result);
+        } catch (setHtmlError) {
+            console.warn('wangEditor setHtml error, fallback to dangerouslyInsertHtml:', setHtmlError);
+            wangEditorInstance.clear();
+            wangEditorInstance.dangerouslyInsertHtml(result);
+        }
+        
+        showToast('排版完成');
+        document.getElementById('ai-format-box').style.display = 'none';
+        // 保留输入内容，以便下次打开时默认显示
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            showToast('已中断 AI 排版');
+        } else {
+            showToast(error.message || 'AI 排版失败');
+        }
+    } finally {
+        btnSubmit.textContent = '确定';
+        btnSubmit.disabled = false;
+        window.isAIGenerating = false;
+        window.aiFormatController = null;
+    }
+});
+
+document.getElementById('ai-format-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        document.getElementById('btn-ai-format-submit').click();
+    }
+});
 
 // ============ Link Editor ============
 function openLinkEditor(node) {
@@ -4365,6 +4509,17 @@ document.getElementById('btn-import').addEventListener('click', openImportDialog
 document.getElementById('btn-add-association').addEventListener('click', addAssociation);
 document.getElementById('btn-add-summary').addEventListener('click', addSummary);
 
+// Settings
+document.getElementById('btn-settings').addEventListener('click', () => {
+    if (window.aiService) {
+        const config = window.aiService.getConfig();
+        document.getElementById('ai-base-url-input').value = config.baseUrl;
+        document.getElementById('ai-api-key-input').value = config.apiKey;
+        document.getElementById('ai-model-input').value = config.model;
+    }
+    openModal('modal-settings');
+});
+
 // ============ Export Modal ============
 document.querySelectorAll('.export-item').forEach(item => {
     item.addEventListener('click', () => {
@@ -4445,23 +4600,41 @@ function closeModal(id) {
     document.getElementById(id).style.display = 'none';
 }
 
+function handleNoteModalClose(isOverlayClick) {
+    if (window.isAIGenerating) {
+        if (confirm('AI正在生成排版内容，确定要中断并退出吗？')) {
+            if (window.aiFormatController) {
+                window.aiFormatController.abort();
+            }
+            window.isAIGenerating = false;
+        } else {
+            return false;
+        }
+    }
+    
+    if (isNoteModified()) {
+        if (isOverlayClick) {
+            showToast('备注已修改，请点击保存');
+            return false;
+        } else {
+            if (!confirm('备注有未保存的修改，确定要丢弃吗？')) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 document.querySelectorAll('.modal-close, .modal-overlay').forEach(el => {
     el.addEventListener('click', (e) => {
         if (e.target === el || e.target.classList.contains('modal-close')) {
             const overlay = el.closest('.modal-overlay');
             
             // 备注框特殊处理：如果内容被修改，阻止点击空白处(其他地方)关闭
-            if (overlay.id === 'modal-note' && isNoteModified()) {
-                // 如果是点击空白处
-                if (e.target === el && el.classList.contains('modal-overlay')) {
-                    showToast('备注已修改，请点击保存');
+            if (overlay.id === 'modal-note') {
+                const isOverlayClick = (e.target === el && el.classList.contains('modal-overlay'));
+                if (!handleNoteModalClose(isOverlayClick)) {
                     return;
-                }
-                // 如果是点击右上角 X 按钮，给个确认提示
-                if (e.target.classList.contains('modal-close')) {
-                    if (!confirm('备注有未保存的修改，确定要丢弃吗？')) {
-                        return;
-                    }
                 }
             }
             
@@ -4474,12 +4647,24 @@ document.querySelectorAll('.modal-close, .modal-overlay').forEach(el => {
 document.getElementById('modal-open-cancel').addEventListener('click', () => closeModal('modal-open'));
 document.getElementById('modal-search-cancel').addEventListener('click', () => closeModal('modal-search'));
 document.getElementById('modal-note-cancel').addEventListener('click', () => {
-    if (isNoteModified() && !confirm('备注有未保存的修改，确定要丢弃吗？')) {
+    if (!handleNoteModalClose(false)) {
         return;
     }
     closeModal('modal-note');
 });
 document.getElementById('modal-link-cancel').addEventListener('click', () => closeModal('modal-link'));
+document.getElementById('modal-settings-cancel').addEventListener('click', () => closeModal('modal-settings'));
+
+document.getElementById('modal-settings-save').addEventListener('click', () => {
+    if (window.aiService) {
+        const baseUrl = document.getElementById('ai-base-url-input').value.trim();
+        const apiKey = document.getElementById('ai-api-key-input').value.trim();
+        const model = document.getElementById('ai-model-input').value.trim();
+        window.aiService.updateConfig(baseUrl, apiKey, model);
+        showToast('AI 设置已保存');
+    }
+    closeModal('modal-settings');
+});
 
 // 模态框关闭时清理状态
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
@@ -4503,9 +4688,10 @@ document.addEventListener('keydown', (e) => {
         ['modal-open', 'modal-search', 'modal-note', 'modal-link', 'modal-theme', 'modal-export', 'modal-import'].forEach(id => {
             const el = document.getElementById(id);
             if (el.style.display === 'flex') {
-                if (id === 'modal-note' && isNoteModified()) {
-                    showToast('备注已修改，请点击保存');
-                    return;
+                if (id === 'modal-note') {
+                    if (!handleNoteModalClose(false)) {
+                        return;
+                    }
                 }
                 closeModal(id);
             }
