@@ -6,6 +6,8 @@
     <title>AI Mind - 思维导图</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="/static/js/simpleMindMap.esm.min.css">
+    <!-- 引入 wangEditor CSS -->
+    <link href="https://unpkg.com/@wangeditor/editor@latest/dist/css/style.css" rel="stylesheet">
 </head>
 <body>
     <!-- 顶部工具栏 -->
@@ -237,13 +239,16 @@
 
     <!-- 备注编辑弹出窗 -->
     <div class="modal-overlay" id="modal-note" style="display:none">
-        <div class="modal">
+        <div class="modal" style="width: 600px; max-width: 90vw;">
             <div class="modal-header">
                 <span>编辑备注</span>
                 <button class="modal-close" id="modal-note-close">&times;</button>
             </div>
-            <div class="modal-body">
-                <textarea id="note-input" class="note-input" placeholder="输入备注内容..." rows="8"></textarea>
+            <div class="modal-body" style="padding: 0;">
+                <div style="border: 1px solid #ccc; z-index: 100;">
+                    <div id="editor-toolbar" style="border-bottom: 1px solid #ccc;"></div>
+                    <div id="editor-container" style="height: 300px;"></div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" id="modal-note-cancel">取消</button>
@@ -357,6 +362,7 @@
         </div>
     </div>
 
+    <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"></script>
     <script src="/static/js/simpleMindMap.umd.min.js"></script>
     <script src="/static/js/app.js"></script>
 </body>

@@ -952,3 +952,74 @@ html, body {
 .canvas-wrapper.full {
     flex: 1;
 }
+
+/* ---------------- 富文本 Tooltip ---------------- */
+.rich-tooltip {
+    position: fixed;
+    display: none;
+    width: max-content;
+    max-width: 1260px; /* 原先420px的3倍 */
+    max-height: 320px;
+    overflow: auto;
+    padding: 12px 14px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    z-index: 9999;
+    pointer-events: auto; /* changed from none */
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+.rich-tooltip p {
+    margin: 0 0 6px 0;
+}
+.rich-tooltip p:last-child {
+    margin-bottom: 0;
+}
+.rich-tooltip ul,
+.rich-tooltip ol {
+    margin: 0 0 6px 0;
+    padding-left: 20px;
+}
+.rich-tooltip blockquote {
+    margin: 6px 0;
+    padding-left: 10px;
+    border-left: 3px solid var(--border-color);
+    color: var(--text-secondary);
+}
+.rich-tooltip table {
+    max-width: 100%;
+    border-collapse: collapse;
+    margin: 6px 0;
+}
+.rich-tooltip th,
+.rich-tooltip td {
+    border: 1px solid var(--border-color);
+    padding: 4px 6px;
+}
+.rich-tooltip img {
+    max-width: 100%;
+    height: auto;
+}
+.rich-tooltip a {
+    color: var(--accent);
+}
+
+/* ---------------- 摘要节点 + 号按钮 ---------------- */
+.gen-plus-btn {
+    transition: opacity 0.18s;
+}
+.gen-plus-btn .gen-plus-circle {
+    transition: fill 0.18s, r 0.15s;
+}
+.gen-plus-btn:hover .gen-plus-circle {
+    fill: #488075;
+    r: 8;
+}
+.gen-plus-btn:active .gen-plus-circle {
+    fill: #3c6e63;
+    r: 7.5;
+}

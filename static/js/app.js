@@ -7,6 +7,7 @@ const MindMap = window.simpleMindMap.default;
 
 // ============ State ============
 let mindMap = null;
+window.mindMap = null; // expose for testing
 let currentUid = null;
 let isDirty = false;
 
@@ -14,6 +15,235 @@ let isDirty = false;
 let floatingNodes = [];
 let _floatingNodeEditingUid = null; // 正在内联编辑的浮动节点UID
 let _ctrlHeld = false; // 追踪 Ctrl 键是否按下，用于多选逻辑
+let wangEditorInstance = null; // 备注富文本编辑器实例
+let _activeGenUid = null; // 当前选中（单击）的摘要节点UID，用于控制+号显示
+
+// 过滤HTML标签工具函数
+function stripHtml(html) {
+    if (!html) return '';
+    const tmp = document.createElement("DIV");
+    tmp.innerHTML = html;
+    return tmp.textContent || tmp.innerText || "";
+}
+
+// 清洗备注HTML，只保留富文本编辑器会产生的常用安全标签和样式
+function sanitizeNoteHtml(html) {
+    if (!html) return '';
+    const template = document.createElement('template');
+    template.innerHTML = html;
+
+    const allowedTags = new Set([
+        'A', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DEL', 'DIV', 'EM', 'H1', 'H2', 'H3',
+        'H4', 'H5', 'H6', 'HR', 'I', 'IMG', 'INS', 'LI', 'MARK', 'OL', 'P', 'PRE',
+        'S', 'SPAN', 'STRIKE', 'STRONG', 'SUB', 'SUP', 'TABLE', 'TBODY', 'TD', 'TH',
+        'THEAD', 'TR', 'U', 'UL'
+    ]);
+    const blockedTags = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META']);
+    const globalAttrs = new Set(['align', 'style', 'title']);
+    const tagAttrs = {
+        A: new Set(['href', 'rel', 'target']),
+        IMG: new Set(['alt', 'height', 'src', 'width']),
+        TD: new Set(['colspan', 'rowspan']),
+        TH: new Set(['colspan', 'rowspan'])
+    };
+    const allowedStyles = new Set([
+        'background-color', 'border', 'border-bottom', 'border-color', 'border-left',
+        'border-right', 'border-top', 'border-width', 'color', 'font-family', 'font-size',
+        'font-style', 'font-weight', 'height', 'line-height', 'margin', 'margin-bottom',
+        'margin-left', 'margin-right', 'margin-top', 'padding', 'padding-bottom',
+        'padding-left', 'padding-right', 'padding-top', 'text-align', 'text-decoration',
+        'text-indent', 'vertical-align', 'width'
+    ]);
+
+    const isSafeUrl = (value, allowDataImage = false) => {
+        const trimmed = (value || '').trim();
+        if (!trimmed) return false;
+        const lower = trimmed.toLowerCase().replace(/\s/g, '');
+        if (lower.startsWith('javascript:') || lower.startsWith('vbscript:')) return false;
+        if (allowDataImage && /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(trimmed)) return true;
+        if (trimmed.startsWith('#') || trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../')) return true;
+        try {
+            const url = new URL(trimmed, window.location.origin);
+            return ['http:', 'https:', 'mailto:', 'tel:'].includes(url.protocol);
+        } catch (err) {
+            return false;
+        }
+    };
+
+    const cleanStyle = (styleText) => {
+        return styleText
+            .split(';')
+            .map(item => item.trim())
+            .filter(Boolean)
+            .map(item => {
+                const index = item.indexOf(':');
+                if (index === -1) return '';
+                const prop = item.slice(0, index).trim().toLowerCase();
+                const value = item.slice(index + 1).trim();
+                const unsafeValue = /expression\s*\(|url\s*\(|@import|[<>]/i.test(value);
+                if (!allowedStyles.has(prop) || unsafeValue) return '';
+                return `${prop}: ${value}`;
+            })
+            .filter(Boolean)
+            .join('; ');
+    };
+
+    const cleanNode = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) return;
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+            node.remove();
+            return;
+        }
+
+        const tagName = node.tagName.toUpperCase();
+        if (blockedTags.has(tagName)) {
+            node.remove();
+            return;
+        }
+
+        Array.from(node.childNodes).forEach(cleanNode);
+
+        if (!allowedTags.has(tagName)) {
+            const parent = node.parentNode;
+            if (!parent) return;
+            while (node.firstChild) {
+                parent.insertBefore(node.firstChild, node);
+            }
+            node.remove();
+            return;
+        }
+
+        Array.from(node.attributes).forEach(attr => {
+            const name = attr.name.toLowerCase();
+            const allowedForTag = tagAttrs[tagName] && tagAttrs[tagName].has(name);
+            if (name.startsWith('on') || (!globalAttrs.has(name) && !allowedForTag)) {
+                node.removeAttribute(attr.name);
+                return;
+            }
+            if (name === 'style') {
+                const safeStyle = cleanStyle(attr.value);
+                if (safeStyle) node.setAttribute('style', safeStyle);
+                else node.removeAttribute('style');
+                return;
+            }
+            if (name === 'href' && !isSafeUrl(attr.value)) {
+                node.removeAttribute(attr.name);
+                return;
+            }
+            if (name === 'src' && !isSafeUrl(attr.value, true)) {
+                node.removeAttribute(attr.name);
+            }
+        });
+
+        if (tagName === 'A' && node.getAttribute('href')) {
+            node.setAttribute('target', '_blank');
+            node.setAttribute('rel', 'noopener noreferrer');
+        }
+    };
+
+    Array.from(template.content.childNodes).forEach(cleanNode);
+    return template.innerHTML.trim();
+}
+
+let richNoteTooltipEl = null;
+let richNoteTooltipHideTimer = null;
+let isMouseInTooltip = false;
+
+// 获取共享备注悬浮层
+function getRichNoteTooltipEl() {
+    if (richNoteTooltipEl) return richNoteTooltipEl;
+    richNoteTooltipEl = document.createElement('div');
+    richNoteTooltipEl.className = 'rich-tooltip';
+    richNoteTooltipEl.setAttribute('aria-hidden', 'true');
+    
+    // 鼠标进入悬浮层时取消隐藏定时器，允许用户在悬浮层上滚动和操作
+    richNoteTooltipEl.addEventListener('mouseenter', () => {
+        isMouseInTooltip = true;
+        if (richNoteTooltipHideTimer) {
+            clearTimeout(richNoteTooltipHideTimer);
+            richNoteTooltipHideTimer = null;
+        }
+    });
+    
+    // 鼠标离开悬浮层时立即隐藏
+    richNoteTooltipEl.addEventListener('mouseleave', () => {
+        isMouseInTooltip = false;
+        hideRichNoteTooltip(0);
+    });
+
+    document.body.appendChild(richNoteTooltipEl);
+    return richNoteTooltipEl;
+}
+
+// 判断清洗后的备注是否还有可展示内容
+function hasVisibleNoteContent(html) {
+    if (!html) return false;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    return !!(tmp.textContent.trim() || tmp.querySelector('img, table, hr'));
+}
+
+// 定位富文本备注悬浮层，避免贴到窗口边缘外
+function positionRichNoteTooltip(left, top, anchorRect) {
+    const tooltip = getRichNoteTooltipEl();
+    const gap = 10;
+    const margin = 8;
+    const rect = tooltip.getBoundingClientRect();
+    let x = anchorRect ? anchorRect.left : left;
+    let y = anchorRect ? anchorRect.bottom + gap : top;
+
+    x = Math.min(Math.max(margin, x), Math.max(margin, window.innerWidth - rect.width - margin));
+    if (y + rect.height > window.innerHeight - margin && anchorRect) {
+        y = anchorRect.top - rect.height - gap;
+    }
+    y = Math.min(Math.max(margin, y), Math.max(margin, window.innerHeight - rect.height - margin));
+
+    tooltip.style.left = x + 'px';
+    tooltip.style.top = y + 'px';
+}
+
+// 显示共享富文本备注悬浮层
+function showRichNoteTooltip(noteHtml, left, top, anchorRect) {
+    if (richNoteTooltipHideTimer) {
+        clearTimeout(richNoteTooltipHideTimer);
+        richNoteTooltipHideTimer = null;
+    }
+    const safeHtml = sanitizeNoteHtml(noteHtml);
+    if (!hasVisibleNoteContent(safeHtml)) {
+        hideRichNoteTooltip(0);
+        return;
+    }
+    const tooltip = getRichNoteTooltipEl();
+    tooltip.innerHTML = safeHtml;
+    tooltip.style.display = 'block';
+    tooltip.setAttribute('aria-hidden', 'false');
+    positionRichNoteTooltip(left, top, anchorRect);
+}
+
+// 隐藏共享富文本备注悬浮层
+function hideRichNoteTooltip(delay) {
+    if (isMouseInTooltip) return; // 如果鼠标在悬浮层内，忽略外部触发的隐藏请求
+
+    const hideDelay = typeof delay === 'number' ? delay : 300; // 默认300ms延迟，方便鼠标移动到悬浮层上
+    
+    if (richNoteTooltipHideTimer) {
+        clearTimeout(richNoteTooltipHideTimer);
+    }
+    
+    if (hideDelay > 0) {
+        richNoteTooltipHideTimer = setTimeout(() => {
+            const tooltip = getRichNoteTooltipEl();
+            tooltip.style.display = 'none';
+            tooltip.setAttribute('aria-hidden', 'true');
+            richNoteTooltipHideTimer = null;
+        }, hideDelay);
+    } else {
+        const tooltip = getRichNoteTooltipEl();
+        tooltip.style.display = 'none';
+        tooltip.setAttribute('aria-hidden', 'true');
+        richNoteTooltipHideTimer = null;
+    }
+}
 
 function undo() {
     if (!mindMap) return;
@@ -47,8 +277,210 @@ function getSvgTransformGroup() {
     return svg.querySelector('g');
 }
 
+// 解析 SVG 元素的 transform (支持 matrix 和 translate)
+function getSvgElementPos(el) {
+    const transform = el.getAttribute('transform') || '';
+    const matrixMatch = transform.match(/matrix\([^,]+,[^,]+,[^,]+,[^,]+,\s*([^,]+),\s*([^)]+)\)/);
+    if (matrixMatch) return { x: parseFloat(matrixMatch[1]), y: parseFloat(matrixMatch[2]) };
+    const txMatch = transform.match(/translate\(([^,]+),?\s*([^)]+)?\)/);
+    if (txMatch) return { x: parseFloat(txMatch[1]), y: txMatch[2] ? parseFloat(txMatch[2]) : 0 };
+    return { x: 0, y: 0 };
+}
+
+// 浮动节点在 SVG 中是按其中心点 (x, y) 渲染的
+// 原生节点的 left/top 是其左上角，width/height 是宽高
+// 在垂直布局中，我们希望浮动节点的中心 X (即 fn.data.x) 对齐目标节点的中心 X (即 targetX + targetW/2)
+function updateAttachedFloatingNodesPositions() {
+    let changed = false;
+    const svg = document.querySelector('#mindMapContainer svg');
+    if (!svg) return false;
+    
+    const layout = mindMap && mindMap.opt ? mindMap.opt.layout || 'logicalStructure' : 'logicalStructure';
+    const isVerticalLayout = layout.toLowerCase().includes('organization') || layout === 'timeline2';
+
+    // 多次循环以处理级联依附
+    for (let i = 0; i < 3; i++) {
+        floatingNodes.forEach(fn => {
+            if (!fn.data._attachedTo) return;
+            const targetUid = fn.data._attachedTo.uid;
+            let targetX = 0, targetY = 0, targetW = 0, targetH = 0;
+            
+            const targetNode = mindMap && mindMap.renderer ? mindMap.renderer.findNodeByUid(targetUid) : null;
+            if (targetNode) {
+                if (targetNode.isGeneralization) {
+                    const belongUid = targetNode.generalizationBelongNode ? targetNode.generalizationBelongNode.getData('uid') : targetUid;
+                    const genEl = svg.querySelector(`.smm-node.generalization_${belongUid}`);
+                    if (genEl) {
+                        const pos = getSvgElementPos(genEl);
+                        const shape = genEl.querySelector('.smm-node-shape');
+                        const bb = shape ? shape.getBBox() : { width: 100, height: 30 };
+                        targetW = bb.width;
+                        targetH = bb.height;
+                        
+                        // 由于 SVG BBox 获取的 x,y 是相对于 group 的
+                        // pos.x/y 在简单场景下可能是准确的，但有时候是 translate(x, y) 加上内部元素的位移
+                        // 更保险的方式是直接使用 mindMap 内部的数据
+                        targetX = targetNode.left || pos.x;
+                        targetY = targetNode.top || pos.y;
+                        targetW = targetNode.width || bb.width;
+                        targetH = targetNode.height || bb.height;
+                    } else {
+                        // 降级：如果找不到真正的 DOM，尝试用自身 UID
+                        const fallbackEl = svg.querySelector(`.smm-node.generalization_${targetUid}`);
+                        if (fallbackEl) {
+                            const pos = getSvgElementPos(fallbackEl);
+                            const shape = fallbackEl.querySelector('.smm-node-shape');
+                            const bb = shape ? shape.getBBox() : { width: 100, height: 30 };
+                            targetX = targetNode.left || pos.x;
+                            targetY = targetNode.top || pos.y;
+                            targetW = targetNode.width || bb.width;
+                            targetH = targetNode.height || bb.height;
+                        } else {
+                            targetX = targetNode.left || 0;
+                            targetY = targetNode.top || 0;
+                            targetW = targetNode.width || 100;
+                            targetH = targetNode.height || 30;
+                        }
+                    }
+                } else {
+                    targetX = targetNode.left;
+                    targetY = targetNode.top;
+                    targetW = targetNode.width;
+                    targetH = targetNode.height;
+                }
+            } else {
+                const parentFloat = floatingNodes.find(f => f.data.uid === targetUid);
+                if (parentFloat) {
+                    // 对于浮动节点，它的 targetX, targetY 实际上是中心点，为了跟原生节点统一，我们把它转为左上角
+                    targetW = 80; // 预估
+                    targetH = 30; // 预估
+                    targetX = parentFloat.data.x - targetW/2; 
+                    targetY = parentFloat.data.y - targetH/2;
+                }
+            }
+            
+            if (targetW > 0) {
+                let newX, newY;
+                if (isVerticalLayout) {
+                    newX = targetX + targetW / 2 + fn.data._attachedTo.offsetX;
+                    // 在垂直布局中，targetX/targetY 已经是根据 targetNode.left/top 取得的。
+                    // 摘要节点本身在垂直布局下是放在普通节点下方的。
+                    // 我们想要新节点在摘要节点下方。所以我们需要使用 targetH。
+                    // 由于新节点的 x, y 是中心点，我们要确保它刚好在目标下方 60px 的位置（顶部对齐目标底部 60px）
+                    // 所以：目标底边 = targetY + targetH
+                    // 新节点中心 Y = 目标底边 + offsetY(即60) + 新节点自身高度一半(约15)
+                    newY = targetY + targetH + fn.data._attachedTo.offsetY + 15; 
+                } else {
+                    newX = targetX + targetW + fn.data._attachedTo.offsetX + 40; // 目标右边缘 + 偏移量 + 浮动节点宽度的一半(约40)
+                    newY = targetY + targetH / 2 + fn.data._attachedTo.offsetY;
+                }
+
+                if (Math.abs(fn.data.x - newX) > 1 || Math.abs(fn.data.y - newY) > 1) {
+                    fn.data.x = newX;
+                    fn.data.y = newY;
+                    changed = true;
+                }
+            }
+        });
+    }
+    return changed;
+}
+
+// 创建依附型衍生节点
+function createAttachedFloatingNode(targetUid, isGenNode) {
+    if (!mindMap) return;
+    const targetNode = mindMap.renderer.findNodeByUid(targetUid);
+    let rightEdge = 0, centerY = 0;
+    
+    // 获取当前布局方向 (logicalStructure 逻辑结构、organizationStructure 组织结构等)
+    const layout = mindMap.opt.layout || 'logicalStructure';
+    const isVerticalLayout = layout.toLowerCase().includes('organization') || layout === 'timeline2';
+    
+    if (isGenNode && targetNode) {
+        if (isVerticalLayout) {
+            // 摘要节点本身在垂直结构中可能被渲染成一个横向很宽的块（因为它包裹了多个子节点）
+            // 但是在我们的连线逻辑里，如果我们要让新分支挂在它正下方，应该用它的实际渲染宽度的一半
+            // 由于 targetNode.left/width 对于包裹型的 isGeneralization 是准确反映其包围盒的
+            rightEdge = targetNode.left + targetNode.width / 2;
+            centerY = targetNode.top + targetNode.height + 60 + 15;
+        } else {
+            rightEdge = targetNode.left + targetNode.width + 60 + 40;
+            centerY = targetNode.top + targetNode.height / 2;
+        }
+    } else if (targetNode) {
+        if (isVerticalLayout) {
+            // 普通节点
+            rightEdge = targetNode.left + targetNode.width / 2;
+            centerY = targetNode.top + targetNode.height + 60 + 15;
+        } else {
+            rightEdge = targetNode.left + targetNode.width + 60 + 40;
+            centerY = targetNode.top + targetNode.height / 2;
+        }
+    } else {
+        const parentFloat = floatingNodes.find(f => f.data.uid === targetUid);
+        if (parentFloat) {
+            const fw = 80; // 预估文本宽度
+            const fh = 30;
+            if (isVerticalLayout) {
+                // 父节点是浮动节点时，其 data.x 是中心
+                rightEdge = parentFloat.data.x; 
+                centerY = parentFloat.data.y + fh/2 + 60 + 15;
+            } else {
+                rightEdge = parentFloat.data.x + fw/2 + 60 + 40; 
+                centerY = parentFloat.data.y;
+            }
+        }
+    }
+    
+    const uid = generateFloatUid();
+    // 默认颜色同 mindMap 连线颜色
+    const lineColor = window._branchLineGlobalStyle ? window._branchLineGlobalStyle.color : '#549688';
+
+    const floatNode = {
+        data: {
+            uid: uid,
+            text: '新分支',
+            x: rightEdge, 
+            y: centerY,
+            isActive: false,
+            color: '#333333',
+            fillColor: '#ffffff',
+            fontSize: 14,
+            _relations: [{
+                nodeUid: targetUid,
+                arrowTo: 'float',
+                color: lineColor,
+                dasharray: 'none',
+                width: 2,
+                isAttached: true // 标记为依附连线，将绘制为平滑分支曲线且无箭头
+            }],
+            _attachedTo: {
+                uid: targetUid,
+                offsetX: 0, 
+                offsetY: 0
+            }
+        }
+    };
+    
+    if (isVerticalLayout) {
+        floatNode.data._attachedTo.offsetX = 0;
+        floatNode.data._attachedTo.offsetY = 60; // 纯间距
+    } else {
+        floatNode.data._attachedTo.offsetX = 60; // 纯间距
+        floatNode.data._attachedTo.offsetY = 0;
+    }
+
+    floatingNodes.push(floatNode);
+    isDirty = true;
+    renderFloatingNodes();
+    updatePropertyPanel();
+    showToast('已添加新分支');
+}
+
 // 在 SVG 中渲染所有浮动节点
 function renderFloatingNodes() {
+    updateAttachedFloatingNodesPositions();
+
     const container = document.getElementById('mindMapContainer');
     const svg = container.querySelector('svg');
     if (!svg) return;
@@ -207,19 +639,21 @@ function renderFloatingNodes() {
             // 备注图标（文档）
             if (note) {
                 const ig = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-                ig.setAttribute('transform', `translate(${rx}, ${ry})`);
-                const nr = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                nr.setAttribute('x', '1'); nr.setAttribute('y', '1'); nr.setAttribute('width', '12'); nr.setAttribute('height', '12');
-                nr.setAttribute('rx', '1'); nr.setAttribute('fill', 'none'); nr.setAttribute('stroke', '#999'); nr.setAttribute('stroke-width', '1');
-                ig.appendChild(nr);
-                for (let li = 0; li < 3; li++) {
-                    const nl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                    nl.setAttribute('x1', '3'); nl.setAttribute('y1', 4 + li * 3); nl.setAttribute('x2', '10'); nl.setAttribute('y2', 4 + li * 3);
-                    nl.setAttribute('stroke', '#999'); nl.setAttribute('stroke-width', '0.8');
-                    ig.appendChild(nl);
-                }
+                ig.setAttribute('class', 'floating-node-note-icon');
+                ig.setAttribute('data-note-html', note);
+                ig.setAttribute('transform', `translate(${rx}, ${ry - 3})`); // 调整Y轴使变大后的图标居中
+                
+                // 对齐普通节点的原生备注图标（折角文档样式）
+                ig.innerHTML = `
+                    <svg viewBox="0 0 1024 1024" width="20" height="20" x="0" y="0">
+                        <path d="M834.7648 340.992c-15.36-15.1552-30.9248-30.1056-46.2848-45.2608-14.7456-14.5408-29.696-29.0816-44.4416-43.8272-13.7216-13.5168-27.648-26.8288-41.5744-40.1408-11.264-10.8544-22.7328-21.504-34.1504-32.1536-11.8784-11.264-24.5248-21.7088-37.376-31.9488-8.192-6.5536-17.8176-12.288-28.0576-16.384-9.8304-3.6864-20.48-4.9152-31.1296-5.12-16.7936-0.4096-33.5872-0.2048-50.3808-0.2048H325.2224c-53.6576 0-97.0752 43.4176-97.0752 97.0752v579.3792c0 53.6576 43.4176 97.0752 97.0752 97.0752h373.5552c53.6576 0 97.0752-43.4176 97.0752-97.0752V395.264c0-19.456-7.5776-38.0928-21.0944-54.272zM572.2112 203.776c24.3712 23.9616 48.9472 47.7184 73.5232 71.4752 14.1312 13.9264 28.2624 27.648 42.1888 41.3696-1.8432 1.4336-3.8912 2.8672-5.9392 4.096-31.3344 19.8656-68.8128 30.72-106.7008 30.72-1.024 0-2.048 0-3.072 0V203.776zM716.3904 802.4064c0 10.0352-8.192 18.2272-18.2272 18.2272H325.2224c-10.0352 0-18.2272-8.192-18.2272-18.2272V223.0272c0-10.0352 8.192-18.2272 18.2272-18.2272h168.1408v146.6368c1.024 45.4656 22.3232 87.8592 58.7776 115.3024 33.3824 25.1904 74.9568 38.0928 116.736 35.84v300.032h47.5136v-0.2048z" fill="#94a3b8"></path>
+                        <path d="M381.1328 472.2688h261.7344c21.7088 0 39.3216-17.6128 39.3216-39.3216s-17.6128-39.3216-39.3216-39.3216H381.1328c-21.7088 0-39.3216 17.6128-39.3216 39.3216s17.6128 39.3216 39.3216 39.3216z" fill="#94a3b8"></path>
+                        <path d="M381.1328 629.5552h261.7344c21.7088 0 39.3216-17.6128 39.3216-39.3216s-17.6128-39.3216-39.3216-39.3216H381.1328c-21.7088 0-39.3216 17.6128-39.3216 39.3216s17.6128 39.3216 39.3216 39.3216z" fill="#94a3b8"></path>
+                        <path d="M381.1328 786.8416h261.7344c21.7088 0 39.3216-17.6128 39.3216-39.3216s-17.6128-39.3216-39.3216-39.3216H381.1328c-21.7088 0-39.3216 17.6128-39.3216 39.3216s17.6128 39.3216 39.3216 39.3216z" fill="#94a3b8"></path>
+                    </svg>
+                `;
                 g.appendChild(ig);
-                rx += iconW + 3;
+                rx += 20 + 3;
             }
             // 链接图标（链条）
             if (link) {
@@ -240,14 +674,24 @@ function renderFloatingNodes() {
                 g.appendChild(ig);
             }
 
-            // tooltip
-            const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-            title.textContent = [note ? '备注: ' + note : '', link ? '链接: ' + link : ''].filter(Boolean).join('\n');
-            g.appendChild(title);
+            // tooltip：链接保留原生提示，备注图标使用自定义富文本悬浮层
+            if (link && !note) {
+                const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                title.textContent = '链接: ' + link;
+                g.appendChild(title);
+            }
         }
 
-        // --- 事件绑定 ---
-        g.style.cursor = 'pointer';
+        g.addEventListener('mouseleave', () => {
+            hideRichNoteTooltip();
+        });
+
+        g.addEventListener('mousemove', (e) => {
+            const noteIcon = e.target.closest && e.target.closest('.floating-node-note-icon');
+            if (!noteIcon) return;
+            const noteHtml = noteIcon.getAttribute('data-note-html');
+            showRichNoteTooltip(noteHtml, e.clientX + 12, e.clientY + 12);
+        });
 
         g.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -285,6 +729,60 @@ function renderFloatingNodes() {
             e.stopPropagation();
             startFloatingNodeEdit(fn);
         });
+
+        // 给选中的浮动节点（特别是作为衍生节点的）渲染一个 + 号，以支持继续向后衍生
+        if (isActive) {
+            const btnG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            btnG.setAttribute('class', 'gen-plus-btn');
+            btnG.style.cursor = 'pointer';
+            
+            const layout = mindMap && mindMap.opt ? mindMap.opt.layout || 'logicalStructure' : 'logicalStructure';
+            const isVerticalLayout = layout.toLowerCase().includes('organization') || layout === 'timeline2';
+
+            // +号放在节点右侧或下方
+            let px = rectLeft + totalWidth + 10;
+            let py = y;
+            if (isVerticalLayout) {
+                px = x;
+                py = rectTop + totalHeight + 10;
+            }
+
+            btnG.setAttribute('transform', `translate(${px}, ${py})`);
+
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', '0'); circle.setAttribute('cy', '0');
+            circle.setAttribute('r', '7');
+            circle.setAttribute('fill', '#549688');
+            circle.setAttribute('stroke', '#fff');
+            circle.setAttribute('stroke-width', '1.5');
+            btnG.appendChild(circle);
+
+            const hLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            hLine.setAttribute('x1', '-3.5'); hLine.setAttribute('y1', '0');
+            hLine.setAttribute('x2', '3.5');  hLine.setAttribute('y2', '0');
+            hLine.setAttribute('stroke', '#fff');
+            hLine.setAttribute('stroke-width', '1.5');
+            hLine.setAttribute('stroke-linecap', 'round');
+            btnG.appendChild(hLine);
+
+            const vLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            vLine.setAttribute('x1', '0'); vLine.setAttribute('y1', '-3.5');
+            vLine.setAttribute('x2', '0'); vLine.setAttribute('y2', '3.5');
+            vLine.setAttribute('stroke', '#fff');
+            vLine.setAttribute('stroke-width', '1.5');
+            vLine.setAttribute('stroke-linecap', 'round');
+            btnG.appendChild(vLine);
+
+            btnG.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                createAttachedFloatingNode(fn.data.uid, false);
+            });
+            btnG.addEventListener('mouseenter', () => circle.setAttribute('fill', '#488075'));
+            btnG.addEventListener('mouseleave', () => circle.setAttribute('fill', '#549688'));
+
+            g.appendChild(btnG);
+        }
 
         // 拖拽支持（使用移动阈值区分点击和拖拽）
         let _dragStarted = false;
@@ -391,7 +889,21 @@ function cleanupFloatingNodeDragListeners() {
 }
 
 // 计算连线从矩形边缘出发的交点（而非中心点）
-function edgePoint(cx, cy, w, h, toX, toY) {
+function edgePoint(cx, cy, w, h, toX, toY, isVerticalLayout = false, isAttached = false) {
+    if (isAttached) {
+        // 依附连线：如果是垂直布局，起点/终点是上下边缘中点；如果是水平布局，起点/终点是左右边缘中点
+        if (isVerticalLayout) {
+            // cx, cy 是中心点，我们假设目标在下方，则返回下边缘；在上方则返回上边缘
+            // 修改这里，避免返回不确定的值。明确判断方向：
+            const y = toY >= cy ? cy + h/2 : cy - h/2;
+            return { x: cx, y: y };
+        } else {
+            const x = toX >= cx ? cx + w/2 : cx - w/2;
+            return { x: x, y: cy };
+        }
+    }
+
+    // 默认的普通关系线
     const dx = toX - cx;
     const dy = toY - cy;
     const len = Math.sqrt(dx * dx + dy * dy);
@@ -421,47 +933,88 @@ function renderFloatRelationLines() {
     const transformGroup = getSvgTransformGroup();
     if (!transformGroup) return;
 
+    // 为了支持挂载在普通节点（或摘要节点）上的自定义关系线，我们提取所有包含 _relations 数据的节点
+    const nodesWithRels = [];
+    // 添加浮动节点
     floatingNodes.forEach(fn => {
-        if (!fn.data._relations || fn.data._relations.length === 0) return;
-
-        // 计算浮动节点尺寸
-        const text = fn.data.text || '';
-        const textLines = text.split('\n');
-        const fontSize = fn.data.fontSize || 14;
-        let maxTextWidth = 0;
-        textLines.forEach(line => {
-            let lineWidth = 0;
-            for (const ch of line) {
-                lineWidth += (ch.charCodeAt(0) > 255) ? fontSize : fontSize * 0.6;
+        if (fn.data._relations && fn.data._relations.length > 0) {
+            nodesWithRels.push({ type: 'float', node: fn, rels: fn.data._relations });
+        }
+    });
+    // 添加带有 _relations 的普通节点或摘要节点
+    if (mindMap && mindMap.renderer && mindMap.renderer.nodeCache) {
+        Object.values(mindMap.renderer.nodeCache).forEach(n => {
+            const r = n.getData('_relations');
+            if (r && r.length > 0) {
+                nodesWithRels.push({ type: 'regular', node: n, rels: r });
             }
-            if (lineWidth > maxTextWidth) maxTextWidth = lineWidth;
+            // 同时检查其身上的摘要节点是否有 _relations
+            if (n._generalizationList && n._generalizationList.length > 0) {
+                n._generalizationList.forEach(g => {
+                    if (g.generalizationNode) {
+                        const gr = g.generalizationNode.getData('_relations');
+                        if (gr && gr.length > 0) {
+                            nodesWithRels.push({ type: 'regular', node: g.generalizationNode, rels: gr });
+                        }
+                    }
+                });
+            }
         });
-        const fw = Math.max(maxTextWidth, fontSize * 2) + 24;
-        const fh = textLines.length * fontSize * 1.4 + 12;
-        const fc = { x: fn.data.x, y: fn.data.y };
+    }
 
-        // 清理失效关系（目标节点已被删除），但只在确认不是渲染时序问题时清理
-        // 使用 renderer.nodeCache 确认节点确实不存在
-        fn.data._relations = fn.data._relations.filter(rel => {
+    nodesWithRels.forEach(item => {
+        const rels = item.rels;
+        // 过滤失效关系
+        const validRels = rels.filter(rel => {
             try {
+                if (floatingNodes.some(f => f.data.uid === rel.nodeUid)) return true;
                 const n = mindMap.renderer.findNodeByUid(rel.nodeUid);
                 if (n) return true;
-                // findNodeByUid 可能因时序问题返回 null，检查 nodeCache 兜底
                 const cache = mindMap.renderer.nodeCache;
-                if (cache) {
-                    return Object.values(cache).some(nd => nd.getData && nd.getData('uid') === rel.nodeUid);
-                }
-                return true; // 保守起见，保留关系
+                if (cache && Object.values(cache).some(nd => nd.getData && nd.getData('uid') === rel.nodeUid)) return true;
+                return true;
             } catch (e) { return true; }
         });
+        
+        // 更新原数据中的关系
+        if (item.type === 'float') {
+            item.node.data._relations = validRels;
+        } else {
+            item.node.setData({ _relations: validRels });
+        }
 
-        fn.data._relations.forEach((rel, relIdx) => {
+        validRels.forEach((rel, relIdx) => {
+            // 获取起点 fc, fw, fh
+            let fc = { x: 0, y: 0 }, fw = 100, fh = 32;
+            if (item.type === 'float') {
+                fc.x = item.node.data.x;
+                fc.y = item.node.data.y;
+                const text = item.node.data.text || '';
+                const fontSize = item.node.data.fontSize || 14;
+                fw = Math.max(text.length * fontSize, fontSize * 2) + 24;
+                fh = text.split('\n').length * fontSize * 1.4 + 12;
+            } else {
+                const n = item.node;
+                // 原生节点 (包括摘要节点，因为 simple-mind-map 内部也给它计算了 left/top)
+                fc.x = n.left + n.width / 2;
+                fc.y = n.top + n.height / 2;
+                fw = n.width;
+                fh = n.height;
+            }
+
+            // 获取终点 tc, tw, th
             let tc = null, tw = 100, th = 32;
             try {
-                const targetNode = mindMap.renderer.findNodeByUid(rel.nodeUid);
-                if (targetNode && typeof targetNode.left === 'number') {
-                    tc = { x: targetNode.left + (targetNode.width || 100) / 2, y: targetNode.top + (targetNode.height || 32) / 2 };
-                    tw = targetNode.width || 100; th = targetNode.height || 32;
+                const targetFloat = floatingNodes.find(f => f.data.uid === rel.nodeUid);
+                if (targetFloat) {
+                    tc = { x: targetFloat.data.x, y: targetFloat.data.y };
+                    tw = 80; th = 30; // 预估宽高
+                } else {
+                    const targetNode = mindMap.renderer.findNodeByUid(rel.nodeUid);
+                    if (targetNode && typeof targetNode.left === 'number') {
+                        tc = { x: targetNode.left + (targetNode.width || 100) / 2, y: targetNode.top + (targetNode.height || 32) / 2 };
+                        tw = targetNode.width || 100; th = targetNode.height || 32;
+                    }
                 }
             } catch (e) { /* ignore */ }
 
@@ -480,8 +1033,12 @@ function renderFloatRelationLines() {
             }
             if (!tc) return;
 
-            const p1 = edgePoint(fc.x, fc.y, fw, fh, tc.x, tc.y);
-            const p2 = edgePoint(tc.x, tc.y, tw, th, fc.x, fc.y);
+            const isAttached = rel.isAttached; // 是否为依附衍生节点生成的连线
+            const layout = mindMap.opt.layout || 'logicalStructure';
+            const isVerticalLayout = layout.toLowerCase().includes('organization') || layout === 'timeline2';
+
+            const p1 = edgePoint(fc.x, fc.y, fw, fh, tc.x, tc.y, isVerticalLayout, isAttached);
+            const p2 = edgePoint(tc.x, tc.y, tw, th, fc.x, fc.y, isVerticalLayout, isAttached);
 
             const color = rel.color || '#549688';
             const dash = rel.dasharray || '6,4';
@@ -492,7 +1049,7 @@ function renderFloatRelationLines() {
 
             const lineGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             lineGroup.setAttribute('class', 'float-relation-line-group');
-            lineGroup.setAttribute('data-float-uid', fn.data.uid);
+            lineGroup.setAttribute('data-float-uid', item.type === 'float' ? item.node.data.uid : item.node.getData('uid'));
             lineGroup.setAttribute('data-rel-idx', relIdx);
             lineGroup.style.cursor = 'pointer';
 
@@ -503,9 +1060,55 @@ function renderFloatRelationLines() {
             } else {
                 from = p2; to = p1; // 路径 regular→float，箭头在 float 端
             }
-            const mx = (from.x + to.x) / 2;
-            const my = (from.y + to.y) / 2;
-            const d = `M ${from.x} ${from.y} Q ${mx} ${from.y} ${mx} ${my} Q ${mx} ${to.y} ${to.x} ${to.y}`;
+            
+            // 绘制类似主分支的平滑贝塞尔曲线
+            let d = '';
+            let mx = (from.x + to.x) / 2;
+            let my = (from.y + to.y) / 2;
+            let ctrlX = mx, ctrlY = my;
+
+            // 为了让所有关系线都变成“能调整形状”的那种关系线，我们甚至可以把它转换成真正的原生关联线
+            // 不过对于 isAttached (分支衍生节点)，依然保留其固定计算的平滑曲线，因为那是模拟子节点结构的。
+            // 对于非 isAttached 的关系线，我们将它渲染成带有一点弧度的曲线。
+            if (isAttached) {
+                // 如果是衍生的节点，我们保持它的结构化排版特征（类似系统原生子节点）
+                if (isVerticalLayout) {
+                    const midY = (from.y + to.y) / 2;
+                    d = `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`;
+                    mx = (from.x + to.x) / 2;
+                    my = midY;
+                } else {
+                    const midX = (from.x + to.x) / 2;
+                    d = `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`;
+                    mx = midX;
+                    my = (from.y + to.y) / 2;
+                }
+            } else {
+                // 对于普通关系线，使用带自然弧度的二次贝塞尔曲线
+                const dx = to.x - from.x;
+                const dy = to.y - from.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                // 为了让它能像原生关联线那样，我们使用其自身带有的控制点属性（如果有）
+                if (rel.controlPoint) {
+                    ctrlX = rel.controlPoint.x;
+                    ctrlY = rel.controlPoint.y;
+                } else {
+                    // 默认的弯曲程度
+                    const offset = dist * 0.2; 
+                    const safeOffset = Math.min(offset, 50);
+                    // 根据方向计算法线，使得曲线有一个自然的弧度
+                    const nx = dy / dist * safeOffset;
+                    const ny = -dx / dist * safeOffset;
+                    ctrlX = mx + nx;
+                    ctrlY = my + ny;
+                }
+                
+                d = `M ${from.x} ${from.y} Q ${ctrlX} ${ctrlY} ${to.x} ${to.y}`;
+                // 对于二次贝塞尔曲线 Q，其中点 t=0.5 的位置：
+                mx = 0.25 * from.x + 0.5 * ctrlX + 0.25 * to.x;
+                my = 0.25 * from.y + 0.5 * ctrlY + 0.25 * to.y;
+            }
 
             // 确保箭头 marker 存在
             let arrowMarker = svg.querySelector('#float-arrow');
@@ -514,12 +1117,12 @@ function renderFloatRelationLines() {
                 if (defs) {
                     arrowMarker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
                     arrowMarker.setAttribute('id', 'float-arrow');
-                    arrowMarker.setAttribute('viewBox', '0 0 10 10');
-                    arrowMarker.setAttribute('refX', '10'); arrowMarker.setAttribute('refY', '5');
-                    arrowMarker.setAttribute('markerWidth', '10'); arrowMarker.setAttribute('markerHeight', '10');
+                    arrowMarker.setAttribute('viewBox', '0 0 8 8');
+                    arrowMarker.setAttribute('refX', '8'); arrowMarker.setAttribute('refY', '4');
+                    arrowMarker.setAttribute('markerWidth', '6'); arrowMarker.setAttribute('markerHeight', '6');
                     arrowMarker.setAttribute('orient', 'auto');
                     const ap = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                    ap.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
+                    ap.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z');
                     ap.setAttribute('fill', color);
                     ap.setAttribute('id', 'float-arrow-path');
                     arrowMarker.appendChild(ap);
@@ -546,29 +1149,125 @@ function renderFloatRelationLines() {
             path.setAttribute('stroke-width', isActive ? '3' : String(lineWidth));
             path.setAttribute('stroke-dasharray', dash);
             path.setAttribute('class', 'float-relation-line');
-            path.setAttribute('marker-end', 'url(#float-arrow)');
+            if (!isAttached && rel.showArrow !== false) {
+                path.setAttribute('marker-end', 'url(#float-arrow)');
+            }
             lineGroup.appendChild(path);
 
+            let labelTextEl = null;
             if (label) {
-                const labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-                labelText.setAttribute('x', mx);
-                labelText.setAttribute('y', my - 8);
-                labelText.setAttribute('text-anchor', 'middle');
-                labelText.setAttribute('fill', '#666');
-                labelText.setAttribute('font-size', '11');
-                labelText.setAttribute('font-family', 'sans-serif');
-                labelText.textContent = label;
-                labelText.setAttribute('class', 'float-relation-label');
-                lineGroup.appendChild(labelText);
+                labelTextEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                labelTextEl.setAttribute('x', mx);
+                labelTextEl.setAttribute('y', my - 8);
+                labelTextEl.setAttribute('text-anchor', 'middle');
+                labelTextEl.setAttribute('fill', '#666');
+                labelTextEl.setAttribute('font-size', '11');
+                labelTextEl.setAttribute('font-family', 'sans-serif');
+                labelTextEl.textContent = label;
+                labelTextEl.setAttribute('class', 'float-relation-label');
+                lineGroup.appendChild(labelTextEl);
+            }
+
+            if (isActive && !isAttached) {
+                const ctrlGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                ctrlGroup.setAttribute('class', 'float-relation-ctrl');
+                ctrlGroup.style.cursor = 'move';
+                
+                const cpLine1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                cpLine1.setAttribute('x1', from.x); cpLine1.setAttribute('y1', from.y);
+                cpLine1.setAttribute('x2', ctrlX); cpLine1.setAttribute('y2', ctrlY);
+                cpLine1.setAttribute('stroke', '#e55'); cpLine1.setAttribute('stroke-width', '1');
+                cpLine1.setAttribute('stroke-dasharray', '3,3');
+                ctrlGroup.appendChild(cpLine1);
+
+                const cpLine2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                cpLine2.setAttribute('x1', to.x); cpLine2.setAttribute('y1', to.y);
+                cpLine2.setAttribute('x2', ctrlX); cpLine2.setAttribute('y2', ctrlY);
+                cpLine2.setAttribute('stroke', '#e55'); cpLine2.setAttribute('stroke-width', '1');
+                cpLine2.setAttribute('stroke-dasharray', '3,3');
+                ctrlGroup.appendChild(cpLine2);
+
+                const ctrlCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                ctrlCircle.setAttribute('cx', ctrlX);
+                ctrlCircle.setAttribute('cy', ctrlY);
+                ctrlCircle.setAttribute('r', '6');
+                ctrlCircle.setAttribute('fill', '#fff');
+                ctrlCircle.setAttribute('stroke', '#e55');
+                ctrlCircle.setAttribute('stroke-width', '2');
+                ctrlGroup.appendChild(ctrlCircle);
+
+                let isDraggingCtrl = false;
+                let startX, startY, initCtrlX, initCtrlY;
+
+                const onMove = (e) => {
+                    if (!isDraggingCtrl) return;
+                    const transform = mindMap.view.getTransformData();
+                    const scale = (transform && transform.state) ? transform.state.scale : 1;
+                    const dx = (e.clientX - startX) / scale;
+                    const dy = (e.clientY - startY) / scale;
+                    
+                    if (!rel.controlPoint) rel.controlPoint = {};
+                    rel.controlPoint.x = initCtrlX + dx;
+                    rel.controlPoint.y = initCtrlY + dy;
+                    
+                    ctrlCircle.setAttribute('cx', rel.controlPoint.x);
+                    ctrlCircle.setAttribute('cy', rel.controlPoint.y);
+                    cpLine1.setAttribute('x2', rel.controlPoint.x);
+                    cpLine1.setAttribute('y2', rel.controlPoint.y);
+                    cpLine2.setAttribute('x2', rel.controlPoint.x);
+                    cpLine2.setAttribute('y2', rel.controlPoint.y);
+                    
+                    const newD = `M ${from.x} ${from.y} Q ${rel.controlPoint.x} ${rel.controlPoint.y} ${to.x} ${to.y}`;
+                    path.setAttribute('d', newD);
+                    hitPath.setAttribute('d', newD);
+                    
+                    if (labelTextEl) {
+                        const newMx = 0.25 * from.x + 0.5 * rel.controlPoint.x + 0.25 * to.x;
+                        const newMy = 0.25 * from.y + 0.5 * rel.controlPoint.y + 0.25 * to.y;
+                        labelTextEl.setAttribute('x', newMx);
+                        labelTextEl.setAttribute('y', newMy - 8);
+                    }
+                };
+                
+                const onUp = () => {
+                    if (isDraggingCtrl) {
+                        isDraggingCtrl = false;
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                        isDirty = true;
+                        if (item.type === 'regular') item.node.setData({ _relations: validRels });
+                    }
+                };
+
+                ctrlGroup.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    isDraggingCtrl = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    initCtrlX = ctrlX;
+                    initCtrlY = ctrlY;
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+
+                lineGroup.appendChild(ctrlGroup);
             }
 
             lineGroup.addEventListener('click', (e) => {
                 e.stopPropagation();
                 floatingNodes.forEach(f => { if (f.data._relations) f.data._relations.forEach(r => r._active = false); });
+                if (mindMap && mindMap.renderer && mindMap.renderer.nodeCache) {
+                    Object.values(mindMap.renderer.nodeCache).forEach(n => {
+                        const r = n.getData('_relations');
+                        if (r) r.forEach(x => x._active = false);
+                    });
+                }
                 rel._active = true;
                 isDirty = true;
                 renderFloatRelationLines();
-                showRelationLinePanel(fn, rel, relIdx);
+                // 如果是挂在普通节点上，我们也可以给它一个面板，但面板目前只接受浮动节点格式
+                // 暂时用 item 包装传入
+                showRelationLinePanel(item, rel, relIdx);
             });
 
             lineGroup.addEventListener('dblclick', (e) => {
@@ -577,6 +1276,7 @@ function renderFloatRelationLines() {
                 if (newLabel !== null) {
                     rel.label = newLabel.trim() || '';
                     isDirty = true;
+                    if (item.type === 'regular') item.node.setData({ _relations: validRels });
                     renderFloatRelationLines();
                 }
             });
@@ -587,18 +1287,21 @@ function renderFloatRelationLines() {
 }
 
 // 关系线样式面板
-function showRelationLinePanel(fn, rel, relIdx) {
+function showRelationLinePanel(item, rel, relIdx) {
     const body = document.getElementById('property-body');
     const color = rel.color || '#549688';
     const dash = rel.dasharray || '6,4';
     const lineWidth = rel.width || 2;
     const label = rel.label || '';
+    const showArrow = rel.showArrow !== false; // 默认显示
+    
+    const nodeText = item.type === 'float' ? (item.node.data.text || '') : (item.node.getData('text') || '');
 
     body.innerHTML = `
         <div class="property-group">
             <div class="property-group-label" style="color:var(--accent);font-weight:600">关系线样式</div>
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
-                ${escapeHtml(fn.data.text || '')} → ${escapeHtml(rel.nodeText || '节点')}
+                ${escapeHtml(nodeText)} → ${escapeHtml(rel.nodeText || '节点')}
             </div>
             <div class="property-group-label">标签文字</div>
             <div class="property-tag-input-wrap">
@@ -624,13 +1327,26 @@ function showRelationLinePanel(fn, rel, relIdx) {
                 <input type="range" class="property-range" id="rel-width" min="1" max="6" value="${lineWidth}">
                 <span class="property-range-value" id="rel-width-val">${lineWidth}</span>
             </div>
+            ${!rel.isAttached ? `
+            <div class="property-row" style="margin-top: 8px;">
+                <label style="display:flex;align-items:center;font-size:12px;color:var(--text);cursor:pointer;">
+                    <input type="checkbox" id="rel-show-arrow" ${showArrow ? 'checked' : ''} style="margin-right:6px;">
+                    显示箭头
+                </label>
+            </div>
+            ` : ''}
             <div style="margin-top:8px">
                 <button class="btn btn-sm" id="rel-delete" style="color:#e55">删除关系线</button>
             </div>
         </div>
     `;
 
-    const updateRel = (prop, val) => { rel[prop] = val; isDirty = true; renderFloatRelationLines(); };
+    const updateRel = (prop, val) => { 
+        rel[prop] = val; 
+        isDirty = true; 
+        if (item.type === 'regular') item.node.setData({ _relations: item.rels });
+        renderFloatRelationLines(); 
+    };
 
     document.getElementById('rel-label-save').addEventListener('click', () => {
         rel.label = document.getElementById('rel-label-input').value.trim();
@@ -645,8 +1361,19 @@ function showRelationLinePanel(fn, rel, relIdx) {
         document.getElementById('rel-width-val').textContent = e.target.value;
     });
     document.getElementById('rel-width').addEventListener('change', (e) => updateRel('width', parseInt(e.target.value)));
+    
+    const showArrowCb = document.getElementById('rel-show-arrow');
+    if (showArrowCb) {
+        showArrowCb.addEventListener('change', (e) => updateRel('showArrow', e.target.checked));
+    }
+
     document.getElementById('rel-delete').addEventListener('click', () => {
-        fn.data._relations.splice(relIdx, 1);
+        if (item.type === 'float') {
+            item.node.data._relations.splice(relIdx, 1);
+        } else {
+            item.rels.splice(relIdx, 1);
+            item.node.setData({ _relations: item.rels });
+        }
         isDirty = true;
         renderFloatRelationLines();
         document.getElementById('property-body').innerHTML = '<p class="empty-hint">选中节点查看属性</p>';
@@ -821,7 +1548,8 @@ function updatePropertyPanelForFloatingNode(fn) {
         const tags = fn.data.tag || [];
         const note = fn.data.note || '';
         const hyperlink = fn.data.hyperlink || '';
-        const hasNote = !!note;
+        const plainNote = note ? stripHtml(note) : '';
+        const hasNote = !!plainNote;
         const hasLink = !!hyperlink;
         // 标准化标签格式
         const normTags = tags.map(t => typeof t === 'string' ? { text: t, color: autoTagColor(t) } : t);
@@ -905,7 +1633,7 @@ function updatePropertyPanelForFloatingNode(fn) {
             <div class="property-group">
                 <div class="property-group-label">备注</div>
                 <button class="property-btn ${hasNote ? 'has-content' : ''}" id="pf-edit-note">
-                    ${hasNote ? '📝 ' + escapeHtml(note.substring(0, 30)) + (note.length > 30 ? '...' : '') : '📝 添加备注...'}
+                    ${hasNote ? '📝 ' + escapeHtml(plainNote.substring(0, 30)) + (plainNote.length > 30 ? '...' : '') : '📝 添加备注...'}
                 </button>
             </div>
 
@@ -927,12 +1655,15 @@ function updatePropertyPanelForFloatingNode(fn) {
 
         // 文字颜色
         document.getElementById('pf-font-color').addEventListener('input', (e) => { fn.data.color = e.target.value; fn.data.fontColor = e.target.value; upd(); });
+        document.getElementById('pf-font-color').addEventListener('change', (e) => { updatePropertyPanelForFloatingNode(fn); });
         document.getElementById('pf-font-color-reset').addEventListener('click', () => { fn.data.color = null; fn.data.fontColor = null; upd(); updatePropertyPanelForFloatingNode(fn); });
         // 背景颜色
         document.getElementById('pf-bg-color').addEventListener('input', (e) => { fn.data.fillColor = e.target.value; upd(); });
+        document.getElementById('pf-bg-color').addEventListener('change', (e) => { updatePropertyPanelForFloatingNode(fn); });
         document.getElementById('pf-bg-color-reset').addEventListener('click', () => { fn.data.fillColor = '#ffffff'; upd(); updatePropertyPanelForFloatingNode(fn); });
         // 边框颜色
         document.getElementById('pf-border-color').addEventListener('input', (e) => { fn.data.borderColor = e.target.value; upd(); });
+        document.getElementById('pf-border-color').addEventListener('change', (e) => { updatePropertyPanelForFloatingNode(fn); });
         // 边框样式
         document.getElementById('pf-border-style').addEventListener('change', (e) => {
             let dash = '';
@@ -1013,17 +1744,28 @@ function setupFloatTagEditor(fn) {
 
 // 浮动节点备注编辑器
 function openFloatNoteEditor(fn) {
-    const textarea = document.getElementById('note-input');
-    textarea.value = fn.data.note || '';
     openModal('modal-note');
+    initNoteEditorIfNeeded();
+
+    const note = fn.data.note || '';
+    if (wangEditorInstance) {
+        wangEditorInstance.setHtml(note);
+    }
     document.getElementById('modal-note-save').onclick = () => {
-        const note = textarea.value.trim();
-        fn.data.note = note || null;
+        let noteHtml = '';
+        let plainText = '';
+        if (wangEditorInstance) {
+            noteHtml = wangEditorInstance.getHtml();
+            plainText = wangEditorInstance.getText().trim();
+        }
+        const finalNote = plainText ? noteHtml : null;
+        
+        fn.data.note = finalNote;
         isDirty = true;
         renderFloatingNodes();
         closeModal('modal-note');
         updatePropertyPanelForFloatingNode(fn);
-        showToast(note ? '备注已保存' : '备注已移除');
+        showToast(finalNote ? '备注已保存' : '备注已移除');
     };
 }
 
@@ -1337,6 +2079,16 @@ function initMindMap(data) {
         fit: true,
         minZoomRatio: 10,
         maxZoomRatio: 500,
+        // 接管库默认备注浮层，使用统一富文本悬浮层显示备注HTML
+        customNoteContentShow: {
+            show: (note, left, top, node) => {
+                const anchorRect = node && node._noteData && node._noteData.node && node._noteData.node.node
+                    ? node._noteData.node.node.getBoundingClientRect()
+                    : null;
+                showRichNoteTooltip(note, left, top, anchorRect);
+            },
+            hide: hideRichNoteTooltip,
+        },
         // 自定义分支线渲染（v0.12.2+）
         customHandleLine: (node, line, { width, color, dasharray }) => {
             const nodeData = node.getData();
@@ -1393,8 +2145,11 @@ function initMindMap(data) {
                 if (!style[uid].associativeLineColor) {
                     style[uid].associativeLineColor = window._branchLineGlobalStyle.color || '';
                 }
-                mindMap.associativeLine.isNotRenderAllLines = true;
-                node.setData({ associativeLineStyle: style });
+                // 不要在这里调用 setData 触发 data_change 或历史记录
+                // 因为 node.setData 会导致重新渲染和各种事件触发
+                // mindMap.associativeLine.isNotRenderAllLines = true;
+                // node.setData({ associativeLineStyle: style });
+                Object.assign(node.data, { associativeLineStyle: style });
                 // 立即更新当前路径的渲染
                 const activeLine = mindMap.associativeLine.activeLine;
                 if (activeLine && activeLine[0]) {
@@ -1409,7 +2164,7 @@ function initMindMap(data) {
     });
     mindMap.on('associative_line_deactivate', () => {
         window._activeAssociativeLine = null;
-        updatePropertyPanel();
+        setTimeout(updatePropertyPanel, 0);
     });
 
     initBranchLineStyle();
@@ -1423,6 +2178,8 @@ function initMindMap(data) {
         setTimeout(applyAssocLineArrowStates, 0);
         // 渲染浮动节点
         renderFloatingNodes();
+        // 渲染摘要节点的 + 号按钮
+        renderSummaryPlusButtons();
         if (!_svgHandlerAttached) {
             _svgHandlerAttached = true;
             const svgEl = container.querySelector('svg');
@@ -1508,13 +2265,16 @@ function initMindMap(data) {
     });
 
     mindMap.on('data_change', () => {
+        // 如果我们刚刚正在记录历史或者恢复历史，就不触发自动保存标记
         isDirty = true;
         updateStatusBar();
         updateOutline();
+        renderFloatingNodes();
     });
 
     mindMap.on('view_data_change', () => {
         updateZoomText();
+        renderFloatingNodes();
     });
 
     mindMap.on('draw_click', () => {
@@ -1524,10 +2284,32 @@ function initMindMap(data) {
             n.data.isActive = false;
             if (n.data._relations) n.data._relations.forEach(r => r._active = false);
         });
+        // 取消普通节点/摘要节点上的自定义关系线选中
+        if (mindMap && mindMap.renderer && mindMap.renderer.nodeCache) {
+            Object.values(mindMap.renderer.nodeCache).forEach(n => {
+                const r = n.getData('_relations');
+                if (r) r.forEach(x => x._active = false);
+                
+                // 检查其上的摘要节点
+                if (n._generalizationList && n._generalizationList.length > 0) {
+                    n._generalizationList.forEach(g => {
+                        if (g.generalizationNode) {
+                            const gr = g.generalizationNode.getData('_relations');
+                            if (gr) gr.forEach(x => x._active = false);
+                        }
+                    });
+                }
+            });
+        }
         window._selectedFloatingNode = null;
         window._relationFirst = null;
         renderFloatingNodes();
         _updatingPropertyPanel = false;
+        // 取消摘要节点选中，隐藏+号
+        if (_activeGenUid) {
+            _activeGenUid = null;
+            renderSummaryPlusButtons();
+        }
         updatePropertyPanel();
     });
 
@@ -1540,18 +2322,49 @@ function initMindMap(data) {
         } else {
             activeNodeCache = [];
         }
+        // 选中普通节点时取消摘要+号
+        if (_activeGenUid && activeNodeCache.length > 0) {
+            _activeGenUid = null;
+            renderSummaryPlusButtons();
+        }
         // 浮动节点先选中 + Ctrl+点击普通节点 → 自动建立关系线
         if (_ctrlHeld && window._selectedFloatingNode && activeNodeCache.length > 0) {
-            // 确定箭头方向：float先选 → 箭头指向regular
-            const arrowTo = (window._relationFirst === 'float') ? 'regular' : 'float';
-            createFloatRelation(window._selectedFloatingNode, activeNodeCache[0], arrowTo);
+            // 确定箭头方向：float先选 → 箭头指向regular，或者 regular先选指向float，或者 regular指向regular
+            if (activeNodeCache[0] && activeNodeCache[0].isGeneralization) {
+                // 如果是摘要节点
+                let arrowTo = 'regular';
+                if (window._relationFirst === 'float') arrowTo = 'regular';
+                else if (window._relationFirst === 'regular') arrowTo = 'float';
+                createFloatRelation(window._selectedFloatingNode, activeNodeCache[0], arrowTo);
+            } else {
+                const arrowTo = (window._relationFirst === 'float') ? 'regular' : 'float';
+                createFloatRelation(window._selectedFloatingNode, activeNodeCache[0], arrowTo);
+            }
             window._selectedFloatingNode = null;
             window._relationFirst = null;
             return;
         }
-        // 取消浮动节点选中（Ctrl+多选时保留）
+        // 取消浮动节点选中和所有关系线选中（Ctrl+多选时保留）
         if (!_ctrlHeld) {
-            floatingNodes.forEach(n => n.data.isActive = false);
+            floatingNodes.forEach(n => {
+                n.data.isActive = false;
+                if (n.data._relations) n.data._relations.forEach(r => r._active = false);
+            });
+            if (mindMap && mindMap.renderer && mindMap.renderer.nodeCache) {
+                Object.values(mindMap.renderer.nodeCache).forEach(n => {
+                    const r = n.getData('_relations');
+                    if (r) r.forEach(x => x._active = false);
+                    
+                    if (n._generalizationList && n._generalizationList.length > 0) {
+                        n._generalizationList.forEach(g => {
+                            if (g.generalizationNode) {
+                                const gr = g.generalizationNode.getData('_relations');
+                                if (gr) gr.forEach(x => x._active = false);
+                            }
+                        });
+                    }
+                });
+            }
             window._selectedFloatingNode = null;
             window._relationFirst = null;
         }
@@ -1566,9 +2379,6 @@ async function autoSave() {
     const data = mindMap.getData();
     data.layout = mindMap.opt.layout || data.layout; // 确保布局被保存
     data._floatingNodes = getFloatingNodesData();
-    console.log('[DEBUG] save: _floatingNodes', data._floatingNodes.map(fn => ({
-        uid: fn.data.uid?.substring(0,10), text: fn.data.text, rels: fn.data._relations
-    })));
     if (currentUid) {
         try {
             await fetch(`/api/mindmaps/${currentUid}`, {
@@ -1600,6 +2410,7 @@ async function newMindMap() {
         const res = await fetch('/api/mindmaps/new', { method: 'POST' });
         const data = await res.json();
         currentUid = data.uid;
+        localStorage.setItem('ai_mind_last_opened_uid', currentUid);
         isDirty = false;
         if (mindMap) {
             mindMap.destroy();
@@ -1616,9 +2427,6 @@ async function saveMindMap() {
     const data = mindMap.getData();
     data.layout = mindMap.opt.layout || data.layout; // 确保布局被保存
     data._floatingNodes = getFloatingNodesData();
-    console.log('[DEBUG] save: _floatingNodes', data._floatingNodes.map(fn => ({
-        uid: fn.data.uid?.substring(0,10), text: fn.data.text, rels: fn.data._relations
-    })));
     if (currentUid) {
         try {
             await fetch(`/api/mindmaps/${currentUid}`, {
@@ -1657,6 +2465,7 @@ async function loadMindMap(uid) {
         const res = await fetch(`/api/mindmaps/${uid}`);
         const data = await res.json();
         currentUid = uid;
+        localStorage.setItem('ai_mind_last_opened_uid', currentUid);
         isDirty = false;
         if (mindMap) {
             mindMap.destroy();
@@ -1680,6 +2489,7 @@ async function deleteMindMap(uid) {
         // 先清空 currentUid，避免后续 autoSave 把数据写回已删除的文件
         if (currentUid === uid) {
             currentUid = null;
+            localStorage.removeItem('ai_mind_last_opened_uid');
         }
         loadFileList();
         // 如果删的是当前文件，自动切换到第一个文件或新建
@@ -1929,7 +2739,8 @@ function updatePropertyPanel() {
     const tags = data.tag || [];
     const note = data.note || '';
     const hyperlink = data.hyperlink || '';
-    const hasNote = !!note;
+    const plainNote = note ? stripHtml(note) : '';
+    const hasNote = !!plainNote;
     const hasLink = !!hyperlink;
 
     body.innerHTML = `
@@ -2024,7 +2835,7 @@ function updatePropertyPanel() {
         <div class="property-group">
             <div class="property-group-label">备注</div>
             <button class="property-btn ${hasNote ? 'has-content' : ''}" id="prop-edit-note">
-                ${hasNote ? '📝 ' + escapeHtml(note.substring(0, 30)) + (note.length > 30 ? '...' : '') : '📝 添加备注...'}
+                ${hasNote ? '📝 ' + escapeHtml(plainNote.substring(0, 30)) + (plainNote.length > 30 ? '...' : '') : '📝 添加备注...'}
             </button>
         </div>
 
@@ -2043,8 +2854,9 @@ function updatePropertyPanel() {
     document.getElementById('prop-font-color').addEventListener('input', (e) => {
         node.setData({ color: e.target.value, fontColor: e.target.value });
         mindMap.render();
+    });
+    document.getElementById('prop-font-color').addEventListener('change', (e) => {
         mindMap.command.addHistory();
-        // 更新显示
         updatePropertyPanel();
     });
     document.getElementById('prop-font-color-reset').addEventListener('click', () => {
@@ -2058,6 +2870,8 @@ function updatePropertyPanel() {
     document.getElementById('prop-bg-color').addEventListener('input', (e) => {
         mindMap.renderer.setNodeStyle(node, 'fillColor', e.target.value);
         mindMap.render();
+    });
+    document.getElementById('prop-bg-color').addEventListener('change', (e) => {
         mindMap.command.addHistory();
         updatePropertyPanel();
     });
@@ -2072,6 +2886,8 @@ function updatePropertyPanel() {
     document.getElementById('prop-border-color').addEventListener('input', (e) => {
         mindMap.renderer.setNodeStyle(node, 'borderColor', e.target.value);
         mindMap.render();
+    });
+    document.getElementById('prop-border-color').addEventListener('change', (e) => {
         mindMap.command.addHistory();
         updatePropertyPanel();
     });
@@ -2112,6 +2928,8 @@ function updatePropertyPanel() {
     document.getElementById('prop-line-color').addEventListener('input', (e) => {
         node.setData({ lineColor: e.target.value });
         mindMap.render();
+    });
+    document.getElementById('prop-line-color').addEventListener('change', (e) => {
         mindMap.command.addHistory();
         updatePropertyPanel();
     });
@@ -2456,19 +3274,70 @@ function setupTagEditor(node) {
 }
 
 // ============ Note Editor ============
+let isNoteEditorInitialized = false;
+
+function initNoteEditorIfNeeded() {
+    if (isNoteEditorInitialized) return;
+    
+    const { createEditor, createToolbar } = window.wangEditor;
+    const editorConfig = {
+        placeholder: '输入备注内容...',
+        hoverbarKeys: {
+            text: {
+                menuKeys: [] // 清空选中文本时弹出的悬浮菜单
+            }
+        },
+        onChange(editor) {
+            // console.log('editor content', editor.getHtml());
+        }
+    };
+    wangEditorInstance = createEditor({
+        selector: '#editor-container',
+        html: '<p><br></p>',
+        config: editorConfig,
+        mode: 'default'
+    });
+    const toolbarConfig = {
+        toolbarKeys: [
+            'bold', 'underline', 'italic', 'through', 'clearStyle',
+            'color', 'bgColor', '|',
+            'bulletedList', 'numberedList', '|',
+            'justifyLeft', 'justifyCenter', 'justifyRight'
+        ]
+    };
+    createToolbar({
+        editor: wangEditorInstance,
+        selector: '#editor-toolbar',
+        config: toolbarConfig,
+        mode: 'default'
+    });
+    isNoteEditorInitialized = true;
+}
+
 function openNoteEditor(node) {
-    const textarea = document.getElementById('note-input');
-    textarea.value = node.getData('note') || '';
     openModal('modal-note');
+    initNoteEditorIfNeeded();
+
+    const note = node.getData('note') || '';
+    if (wangEditorInstance) {
+        wangEditorInstance.setHtml(note);
+    }
 
     document.getElementById('modal-note-save').onclick = () => {
-        const note = textarea.value.trim();
-        node.setData({ note: note || null });
+        let noteHtml = '';
+        let plainText = '';
+        if (wangEditorInstance) {
+            noteHtml = wangEditorInstance.getHtml();
+            plainText = wangEditorInstance.getText().trim();
+        }
+        const finalNote = plainText ? noteHtml : null;
+        
+        node.setData({ note: finalNote });
         mindMap.render();
         mindMap.command.addHistory();
         closeModal('modal-note');
         updatePropertyPanel();
-        showToast(note ? '备注已保存' : '备注已移除');
+        showToast(finalNote ? '备注已保存' : '备注已移除');
     };
 }
 
@@ -2980,26 +3849,41 @@ async function applyImportedData(data) {
 }
 
 // ============ Relationship & Summary ============
+    
+    // 我们还需要在 renderFloatRelationLines 里暴露一种交互，使用户可以通过拖拽控制点来改变曲线形状。
+    // 但鉴于目前的要求，所有浮动节点的关系线（非 isAttached 衍生的）将默认采用一个优美的贝塞尔曲线。
+    // 如果用户希望像普通节点一样拖动调整形状，可以在未来在选中连线时显示控制手柄。
+    // 当前我们已经用偏移算法实现了它自然弯曲，不再是死板的折线或直线。
 
-// 创建浮动节点与普通节点的关系线（共用函数）
-function createFloatRelation(floatNode, regularNode, arrowTo) {
-    if (!floatNode || !regularNode) return;
-    const otherUid = regularNode.getData('uid');
-    const otherText = regularNode.getData('text') || '';
+// 创建浮动节点与普通节点/摘要节点的关系线（共用函数）
+function createFloatRelation(fromNode, targetNode, arrowTo) {
+    if (!fromNode || !targetNode) return;
+    const targetUid = targetNode.getData('uid');
+    const targetText = targetNode.getData('text') || '节点';
 
-    if (!floatNode.data._relations) floatNode.data._relations = [];
-    if (floatNode.data._relations.some(r => r.nodeUid === otherUid)) {
+    let relations = fromNode.data ? fromNode.data._relations : fromNode.getData('_relations');
+    if (!relations) relations = [];
+    
+    if (relations.some(r => r.nodeUid === targetUid)) {
         showToast('关系线已存在');
         return;
     }
-    floatNode.data._relations.push({
-        nodeUid: otherUid,
-        nodeText: otherText,
+    
+    relations.push({
+        nodeUid: targetUid,
+        nodeText: targetText,
         arrowTo: arrowTo || 'float', // 箭头指向：'float' 或 'regular'
-        color: window._branchLineGlobalStyle.color || '#549688',
+        color: window._branchLineGlobalStyle && window._branchLineGlobalStyle.color ? window._branchLineGlobalStyle.color : '#549688',
         dasharray: '6,4',
         width: 2,
     });
+
+    if (fromNode.data) {
+        fromNode.data._relations = relations;
+    } else {
+        fromNode.setData({ _relations: relations });
+        mindMap.command.addHistory();
+    }
 
     window._selectedFloatingNode = null;
     window._relationFirst = null;
@@ -3015,19 +3899,21 @@ function addAssociation() {
     const activeNodes = activeNodeCache;
     const floatNode = window._selectedFloatingNode;
 
-    // 浮动节点 + 普通节点 → 自定义 SVG 连线
+    // 浮动节点 + 普通节点/摘要节点 → 自定义 SVG 连线
     if (floatNode) {
         if (activeNodes.length < 1) {
             showToast('请先选中一个普通节点，再 Ctrl+点击自由节点来建立关系线');
             return;
         }
         // 箭头方向：谁先选就从谁开始
-        const arrowTo = (window._relationFirst === 'float') ? 'regular' : 'float';
+        let arrowTo = 'regular';
+        if (window._relationFirst === 'float') arrowTo = 'regular';
+        else if (window._relationFirst === 'regular') arrowTo = 'float';
         createFloatRelation(floatNode, activeNodes[0], arrowTo);
         return;
     }
 
-    // 两个普通节点 → 库自带关系线
+    // 两个普通节点/摘要节点 → 判断是否需要自定义连线
     if (activeNodes.length < 2) {
         showToast('请按住 Ctrl 选中两个节点来添加关系线');
         return;
@@ -3035,6 +3921,14 @@ function addAssociation() {
 
     const fromNode = activeNodes[0];
     const toNode = activeNodes[1];
+
+    // 如果涉及摘要节点，因为核心库 associativeLine 不支持摘要节点，所以我们降级转换为浮动连线
+    if (fromNode.isGeneralization || toNode.isGeneralization) {
+        // 创建虚拟的浮动节点关系（绑定在起始节点的 _relations 数据上）
+        let arrowTo = 'regular'; // 从 fromNode 到 toNode
+        createFloatRelation(fromNode, toNode, arrowTo);
+        return;
+    }
 
     // 保存分支线颜色作为关联线初始颜色
     const assocStyle = fromNode.getData('associativeLineStyle') || {};
@@ -3077,6 +3971,208 @@ function addSummary() {
     });
     mindMap.command.addHistory();
     showToast('概要已添加');
+}
+
+// 在摘要/概括节点上渲染 + 号按钮，单击摘要节点后显示，点击+在摘要下方生成子节点
+function renderSummaryPlusButtons() {
+    if (!mindMap) return;
+    const svg = document.querySelector('#mindMapContainer svg');
+    if (!svg) return;
+
+    // 清除旧的加号按钮
+    svg.querySelectorAll('.gen-plus-btn').forEach(el => el.remove());
+
+    // 查找所有摘要节点 DOM 元素
+    const genEls = svg.querySelectorAll('.smm-node[class*="generalization_"]');
+
+    // 第一遍：为所有摘要元素绑定单击事件（仅绑定一次）
+    genEls.forEach(genEl => {
+        if (genEl._genClickBound) return;
+        genEl._genClickBound = true;
+        genEl.style.cursor = 'pointer';
+
+        const cls = genEl.getAttribute('class') || '';
+        const uidMatch = cls.match(/generalization_(\S+)/);
+        const elGenUid = uidMatch ? uidMatch[1] : null;
+        if (!elGenUid) return;
+
+        genEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+
+            // 支持 Ctrl/Meta 多选建立关系线
+            if (e.ctrlKey || e.metaKey) {
+                // 获取实际的摘要节点 UID 和实例
+                const belongNode = mindMap.renderer.findNodeByUid(elGenUid);
+                let actualGenNode = null;
+                if (belongNode && belongNode._generalizationList && belongNode._generalizationList.length > 0) {
+                    actualGenNode = belongNode._generalizationList[0].generalizationNode;
+                }
+
+                if (actualGenNode) {
+                    if (!activeNodeCache.includes(actualGenNode)) {
+                        activeNodeCache.push(actualGenNode);
+                        actualGenNode.getData('isActive', true); // 视觉上的假选中，因为核心库可能不认
+                    }
+                    
+                    if (window._selectedFloatingNode && activeNodeCache.length > 0) {
+                        const arrowTo = (window._relationFirst === 'float') ? 'regular' : 'float';
+                        createFloatRelation(window._selectedFloatingNode, actualGenNode, arrowTo);
+                        window._selectedFloatingNode = null;
+                        window._relationFirst = null;
+                    } else if (activeNodeCache.length >= 2) {
+                        showToast('已选中，点击「关系」按钮建立连线');
+                    } else {
+                        window._relationFirst = 'regular';
+                        showToast('已选中摘要节点，请继续 Ctrl+点击其他节点');
+                    }
+                }
+                return;
+            }
+
+            const prev = _activeGenUid;
+            // 切换：点击同一个摘要取消选中，点击其他摘要切换
+            _activeGenUid = (prev === elGenUid) ? null : elGenUid;
+            // 取消普通节点和浮动节点选中
+            if (mindMap && mindMap.renderer) mindMap.renderer.clearActiveNodeList();
+            activeNodeCache = [];
+            floatingNodes.forEach(n => n.data.isActive = false);
+            renderFloatingNodes();
+            updatePropertyPanel();
+            renderSummaryPlusButtons();
+        });
+    });
+
+    // 辅助函数：为指定元素渲染+号
+    function renderPlusBtnForElement(el, targetUid, isSummaryNode) {
+        const shape = el.querySelector('.smm-node-shape');
+        if (!shape) return;
+
+        let shapeW = 135;
+        let shapeH = 30;
+        try {
+            const bb = shape.getBBox();
+            if (bb && bb.width > 0 && bb.height > 0) {
+                shapeW = bb.width;
+                shapeH = bb.height;
+            }
+        } catch (e) { /* 回退到默认值 */ }
+
+        const shapeTransform = shape.getAttribute('transform') || '';
+        const txMatch = shapeTransform.match(/translate\(([^)]+)\)/);
+        let sx = 0, sy = 0;
+        if (txMatch) {
+            const parts = txMatch[1].split(/[\s,]+/).map(parseFloat);
+            sx = parts[0] || 0;
+            sy = parts[1] || 0;
+        }
+
+        const btnG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        btnG.setAttribute('class', 'gen-plus-btn');
+        btnG.style.cursor = 'pointer';
+
+        const layout = mindMap && mindMap.opt ? mindMap.opt.layout || 'logicalStructure' : 'logicalStructure';
+        const isVerticalLayout = layout.toLowerCase().includes('organization') || layout === 'timeline2';
+
+        if (isSummaryNode) {
+            if (isVerticalLayout) {
+                // 对于垂直布局，摘要在下方，我们把+号放右侧
+                btnG.setAttribute('transform', `translate(${sx + shapeW + 10}, ${sy + shapeH / 2})`);
+            } else {
+                // 对于水平布局，摘要在右侧，我们把+号放右侧
+                btnG.setAttribute('transform', `translate(${sx + shapeW + 10}, ${sy + shapeH / 2})`); 
+            }
+        } else {
+            if (isVerticalLayout) {
+                // 普通节点，垂直布局，+号放下方
+                btnG.setAttribute('transform', `translate(${sx + shapeW / 2}, ${sy + shapeH + 10})`);
+            } else {
+                // 普通节点，水平布局，+号放右侧
+                btnG.setAttribute('transform', `translate(${sx + shapeW + 10}, ${sy + shapeH / 2})`);
+            }
+        }
+
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', '0'); circle.setAttribute('cy', '0');
+        circle.setAttribute('r', '7');
+        circle.setAttribute('fill', '#549688');
+        circle.setAttribute('stroke', '#fff');
+        circle.setAttribute('stroke-width', '1.5');
+        btnG.appendChild(circle);
+
+        const hLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hLine.setAttribute('x1', '-3.5'); hLine.setAttribute('y1', '0');
+        hLine.setAttribute('x2', '3.5');  hLine.setAttribute('y2', '0');
+        hLine.setAttribute('stroke', '#fff');
+        hLine.setAttribute('stroke-width', '1.5');
+        hLine.setAttribute('stroke-linecap', 'round');
+        btnG.appendChild(hLine);
+
+        const vLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        vLine.setAttribute('x1', '0'); vLine.setAttribute('y1', '-3.5');
+        vLine.setAttribute('x2', '0'); vLine.setAttribute('y2', '3.5');
+        vLine.setAttribute('stroke', '#fff');
+        vLine.setAttribute('stroke-width', '1.5');
+        vLine.setAttribute('stroke-linecap', 'round');
+        btnG.appendChild(vLine);
+
+        if (isSummaryNode) {
+            el.querySelectorAll('title').forEach(t => t.remove());
+        }
+
+        btnG.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+
+            // 不再尝试通过修改 isGeneralization 使用内置命令，因为底层完全屏蔽
+            // 改为通过扩展的浮动节点系统创建“依附型衍生节点”
+            createAttachedFloatingNode(targetUid, isSummaryNode);
+        });
+
+        btnG.addEventListener('mouseenter', () => circle.setAttribute('fill', '#488075'));
+        btnG.addEventListener('mouseleave', () => circle.setAttribute('fill', '#549688'));
+
+        el.appendChild(btnG);
+    }
+
+    // 第二遍：只为选中的摘要渲染+号按钮
+    if (_activeGenUid) {
+        genEls.forEach(genEl => {
+            const cls = genEl.getAttribute('class') || '';
+            const uidMatch = cls.match(/generalization_(\S+)/);
+            const belongUid = uidMatch ? uidMatch[1] : null;
+            if (!belongUid || belongUid !== _activeGenUid) return;
+            
+            // 获取实际的摘要节点 UID
+            const belongNode = mindMap.renderer.findNodeByUid(belongUid);
+            let actualGenUid = belongUid;
+            if (belongNode && belongNode._generalizationList && belongNode._generalizationList.length > 0) {
+                actualGenUid = belongNode._generalizationList[0].generalizationNode.getData('uid');
+            }
+            
+            renderPlusBtnForElement(genEl, actualGenUid, true);
+        });
+    }
+
+    // 另外，如果当前选中的普通节点是摘要节点的后代，也为其渲染+号
+    if (activeNodeCache && activeNodeCache.length === 1) {
+        const activeNode = activeNodeCache[0];
+        let isDescendant = false;
+        let p = activeNode.parent;
+        while (p) {
+            if (p.isGeneralization) {
+                isDescendant = true;
+                break;
+            }
+            p = p.parent;
+        }
+        if (isDescendant) {
+            const el = activeNode.group ? activeNode.group.node : null;
+            if (el) {
+                renderPlusBtnForElement(el, activeNode.getData('uid'), false);
+            }
+        }
+    }
 }
 
 // ============ Sidebar Tabs ============
@@ -3495,15 +4591,32 @@ document.addEventListener('keydown', (e) => {
 
 
 // ============ Init ============
+
+function initRichTooltip() {
+    // 初始化共享富文本备注悬浮层，并在离开画布时统一隐藏
+    getRichNoteTooltipEl();
+    const container = document.getElementById('mindMapContainer');
+    if (!container || container.dataset.richTooltipBound === 'true') return;
+    container.dataset.richTooltipBound = 'true';
+    container.addEventListener('mouseleave', hideRichNoteTooltip);
+    window.addEventListener('blur', hideRichNoteTooltip);
+}
+
 async function init() {
+    initRichTooltip();
     try {
         const res = await fetch('/api/mindmaps');
         const data = await res.json();
         if (data.mindmaps && data.mindmaps.length > 0) {
-            const first = data.mindmaps[0];
-            const mapRes = await fetch(`/api/mindmaps/${first.id}`);
+            let targetId = data.mindmaps[0].id;
+            const lastOpenedId = localStorage.getItem('ai_mind_last_opened_uid');
+            if (lastOpenedId && data.mindmaps.some(m => m.id === lastOpenedId)) {
+                targetId = lastOpenedId;
+            }
+            const mapRes = await fetch(`/api/mindmaps/${targetId}`);
             const mapData = await mapRes.json();
-            currentUid = first.id;
+            currentUid = targetId;
+            localStorage.setItem('ai_mind_last_opened_uid', currentUid);
             initMindMap(mapData.mindmap);
             // 恢复关系线渲染
             if (mindMap && mindMap.associativeLine) {
