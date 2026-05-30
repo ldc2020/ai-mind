@@ -2322,8 +2322,12 @@ function initMindMap(data) {
         } else {
             activeNodeCache = [];
         }
+        
+        // 检查当前选中的是否是摘要节点
+        const isGenNodeSelected = activeNodeCache.length > 0 && activeNodeCache[0].isGeneralization;
+        
         // 选中普通节点时取消摘要+号
-        if (_activeGenUid && activeNodeCache.length > 0) {
+        if (_activeGenUid && activeNodeCache.length > 0 && !isGenNodeSelected) {
             _activeGenUid = null;
             renderSummaryPlusButtons();
         }
@@ -3314,6 +3318,13 @@ function initNoteEditorIfNeeded() {
     isNoteEditorInitialized = true;
 }
 
+let initialNoteContentForCompare = '';
+
+function isNoteModified() {
+    if (!wangEditorInstance) return false;
+    return wangEditorInstance.getHtml() !== initialNoteContentForCompare;
+}
+
 function openNoteEditor(node) {
     openModal('modal-note');
     initNoteEditorIfNeeded();
@@ -3321,6 +3332,10 @@ function openNoteEditor(node) {
     const note = node.getData('note') || '';
     if (wangEditorInstance) {
         wangEditorInstance.setHtml(note);
+        // 等待编辑器渲染完成后获取初始内容，用于后续判断是否修改
+        setTimeout(() => {
+            initialNoteContentForCompare = wangEditorInstance.getHtml();
+        }, 100);
     }
 
     document.getElementById('modal-note-save').onclick = () => {
@@ -4033,9 +4048,24 @@ function renderSummaryPlusButtons() {
             const prev = _activeGenUid;
             // 切换：点击同一个摘要取消选中，点击其他摘要切换
             _activeGenUid = (prev === elGenUid) ? null : elGenUid;
-            // 取消普通节点和浮动节点选中
-            if (mindMap && mindMap.renderer) mindMap.renderer.clearActiveNodeList();
-            activeNodeCache = [];
+            
+            // 我们希望能够显示摘要节点的属性面板，因此将该摘要节点加入 activeNodeCache
+            // 而不要清除 activeNodeList，或者只清除但保留该摘要节点。
+            const belongNode = mindMap.renderer.findNodeByUid(elGenUid);
+            if (belongNode && belongNode._generalizationList && belongNode._generalizationList.length > 0) {
+                const actualGenNode = belongNode._generalizationList[0].generalizationNode;
+                // 让核心库选中该节点（如果它尚未被选中）
+                if (mindMap && mindMap.renderer) {
+                    try {
+                        mindMap.execCommand('ACTIVE_NODE', [actualGenNode.getData('uid')]);
+                    } catch(e) {}
+                }
+                activeNodeCache = [actualGenNode];
+            } else {
+                if (mindMap && mindMap.renderer) mindMap.renderer.clearActiveNodeList();
+                activeNodeCache = [];
+            }
+            
             floatingNodes.forEach(n => n.data.isActive = false);
             renderFloatingNodes();
             updatePropertyPanel();
@@ -4418,7 +4448,24 @@ function closeModal(id) {
 document.querySelectorAll('.modal-close, .modal-overlay').forEach(el => {
     el.addEventListener('click', (e) => {
         if (e.target === el || e.target.classList.contains('modal-close')) {
-            el.closest('.modal-overlay').style.display = 'none';
+            const overlay = el.closest('.modal-overlay');
+            
+            // 备注框特殊处理：如果内容被修改，阻止点击空白处(其他地方)关闭
+            if (overlay.id === 'modal-note' && isNoteModified()) {
+                // 如果是点击空白处
+                if (e.target === el && el.classList.contains('modal-overlay')) {
+                    showToast('备注已修改，请点击保存');
+                    return;
+                }
+                // 如果是点击右上角 X 按钮，给个确认提示
+                if (e.target.classList.contains('modal-close')) {
+                    if (!confirm('备注有未保存的修改，确定要丢弃吗？')) {
+                        return;
+                    }
+                }
+            }
+            
+            overlay.style.display = 'none';
         }
     });
 });
@@ -4426,7 +4473,12 @@ document.querySelectorAll('.modal-close, .modal-overlay').forEach(el => {
 // 各模态框取消按钮
 document.getElementById('modal-open-cancel').addEventListener('click', () => closeModal('modal-open'));
 document.getElementById('modal-search-cancel').addEventListener('click', () => closeModal('modal-search'));
-document.getElementById('modal-note-cancel').addEventListener('click', () => closeModal('modal-note'));
+document.getElementById('modal-note-cancel').addEventListener('click', () => {
+    if (isNoteModified() && !confirm('备注有未保存的修改，确定要丢弃吗？')) {
+        return;
+    }
+    closeModal('modal-note');
+});
 document.getElementById('modal-link-cancel').addEventListener('click', () => closeModal('modal-link'));
 
 // 模态框关闭时清理状态
@@ -4450,7 +4502,13 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         ['modal-open', 'modal-search', 'modal-note', 'modal-link', 'modal-theme', 'modal-export', 'modal-import'].forEach(id => {
             const el = document.getElementById(id);
-            if (el.style.display === 'flex') closeModal(id);
+            if (el.style.display === 'flex') {
+                if (id === 'modal-note' && isNoteModified()) {
+                    showToast('备注已修改，请点击保存');
+                    return;
+                }
+                closeModal(id);
+            }
         });
     }
 });
