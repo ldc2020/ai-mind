@@ -1,0 +1,75 @@
+Server crash: Unable to configure formatter 'default'
+Traceback (most recent call last):
+  File "logging\config.py", line 583, in configure
+  File "logging\config.py", line 693, in configure_formatter
+  File "logging\config.py", line 487, in configure_custom
+  File "uvicorn\logging.py", line 42, in __init__
+AttributeError: 'NoneType' object has no attribute 'isatty'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "launcher.py", line 52, in start_server
+    config = uvicorn.Config(app, host="127.0.0.1", port=8001, log_level="error", reload=False)
+  File "uvicorn\config.py", line 273, in __init__
+  File "uvicorn\config.py", line 365, in configure_logging
+  File "logging\config.py", line 935, in dictConfig
+  File "logging\config.py", line 586, in configure
+ValueError: Unable to configure formatter 'default'
+
+Server crash: Unable to configure formatter 'default'
+Traceback (most recent call last):
+  File "logging\config.py", line 583, in configure
+  File "logging\config.py", line 693, in configure_formatter
+  File "logging\config.py", line 487, in configure_custom
+  File "uvicorn\logging.py", line 42, in __init__
+AttributeError: 'NoneType' object has no attribute 'isatty'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "launcher.py", line 52, in start_server
+    config = uvicorn.Config(app, host="127.0.0.1", port=8001, log_level="error", reload=False)
+  File "uvicorn\config.py", line 273, in __init__
+  File "uvicorn\config.py", line 365, in configure_logging
+  File "logging\config.py", line 935, in dictConfig
+  File "logging\config.py", line 586, in configure
+ValueError: Unable to configure formatter 'default'
+
+Server crash: Unable to configure formatter 'default'
+Traceback (most recent call last):
+  File "logging\config.py", line 583, in configure
+  File "logging\config.py", line 693, in configure_formatter
+  File "logging\config.py", line 487, in configure_custom
+  File "uvicorn\logging.py", line 42, in __init__
+AttributeError: 'NoneType' object has no attribute 'isatty'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "launcher.py", line 52, in start_server
+    config = uvicorn.Config(app, host="127.0.0.1", port=8001, log_level="error", reload=False)
+  File "uvicorn\config.py", line 273, in __init__
+  File "uvicorn\config.py", line 365, in configure_logging
+  File "logging\config.py", line 935, in dictConfig
+  File "logging\config.py", line 586, in configure
+ValueError: Unable to configure formatter 'default'
+
+Server crash: Unable to configure formatter 'default'
+Traceback (most recent call last):
+  File "logging\config.py", line 583, in configure
+  File "logging\config.py", line 693, in configure_formatter
+  File "logging\config.py", line 487, in configure_custom
+TypeError: Formatter.__init__() got an unexpected keyword argument 'use_colors'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "launcher.py", line 58, in start_server
+    config = uvicorn.Config(app, host="127.0.0.1", port=8001, log_level="error", reload=False, log_config=log_config)
+  File "uvicorn\config.py", line 273, in __init__
+  File "uvicorn\config.py", line 365, in configure_logging
+  File "logging\config.py", line 935, in dictConfig
+  File "logging\config.py", line 586, in configure
+ValueError: Unable to configure formatter 'default'
+

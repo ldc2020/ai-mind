@@ -180,7 +180,9 @@ function hasVisibleNoteContent(html) {
     if (!html) return false;
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
-    return !!(tmp.textContent.trim() || tmp.querySelector('img, table, hr'));
+    const hasText = !!tmp.textContent.trim();
+    const hasMedia = !!tmp.querySelector('img, table, hr, iframe, video, audio, canvas, svg');
+    return hasText || hasMedia;
 }
 
 // 定位富文本备注悬浮层，避免贴到窗口边缘外
@@ -188,14 +190,23 @@ function positionRichNoteTooltip(left, top, anchorRect) {
     const tooltip = getRichNoteTooltipEl();
     const gap = 10;
     const margin = 8;
+    
+    // 限制 tooltip 最大高度，防止超过窗口
+    const maxHeight = Math.min(640, window.innerHeight - 2 * margin);
+    tooltip.style.maxHeight = maxHeight + 'px';
+    
     const rect = tooltip.getBoundingClientRect();
     let x = anchorRect ? anchorRect.left : left;
     let y = anchorRect ? anchorRect.bottom + gap : top;
 
     x = Math.min(Math.max(margin, x), Math.max(margin, window.innerWidth - rect.width - margin));
+    
+    // 如果向下展开会超出屏幕，并且如果向上展开不会超出屏幕（或者向上空间更大），则向上展开
     if (y + rect.height > window.innerHeight - margin && anchorRect) {
         y = anchorRect.top - rect.height - gap;
     }
+    
+    // 最后确保不超出上下边界
     y = Math.min(Math.max(margin, y), Math.max(margin, window.innerHeight - rect.height - margin));
 
     tooltip.style.left = x + 'px';
@@ -215,7 +226,42 @@ function showRichNoteTooltip(noteHtml, left, top, anchorRect) {
     }
     const tooltip = getRichNoteTooltipEl();
     tooltip.innerHTML = safeHtml;
+    
+    // 动态调整宽度：如果图片宽度大于最长文本，则缩放图片到最长文本宽度
+    tooltip.style.width = 'max-content';
     tooltip.style.display = 'block';
+    
+    const imgs = tooltip.querySelectorAll('img');
+    if (imgs.length > 0) {
+        // 先隐藏图片，测量纯文本的宽度
+        const originalDisplays = [];
+        imgs.forEach((img, i) => {
+            originalDisplays.push(img.style.display);
+            img.style.display = 'none';
+        });
+        
+        // 测量文本内容的宽度（包含padding）
+        const textWidth = tooltip.getBoundingClientRect().width;
+        
+        // 恢复图片显示
+        imgs.forEach((img, i) => {
+            img.style.display = originalDisplays[i];
+            img.style.cursor = 'pointer'; // 添加点击指针样式
+            // 绑定点击事件，弹出原图查看
+            img.onclick = (e) => {
+                e.stopPropagation();
+                showImagePreview(img.src);
+            };
+        });
+        
+        // 如果文本宽度大于基础padding（说明有文字），限制容器宽度为文本宽度
+        // 这样图片由于 css 的 max-width: 100% 就会自动缩小到文本宽度
+        // 如果没有文字（宽度等于padding，默认28px左右），则不限制宽度，让图片按自身宽度显示
+        if (textWidth > 40) {
+            tooltip.style.width = textWidth + 'px';
+        }
+    }
+    
     tooltip.setAttribute('aria-hidden', 'false');
     positionRichNoteTooltip(left, top, anchorRect);
 }
@@ -718,7 +764,7 @@ function renderFloatingNodes() {
                 mindMap.renderer.clearActiveNodeList();
             }
             activeNodeCache = [];
-            window._selectedFloatingNode = null;
+            window._selectedFloatingNode = fn;
             floatingNodes.forEach(n => n.data.isActive = false);
             fn.data.isActive = true;
             renderFloatingNodes();
@@ -1548,8 +1594,8 @@ function updatePropertyPanelForFloatingNode(fn) {
         const tags = fn.data.tag || [];
         const note = fn.data.note || '';
         const hyperlink = fn.data.hyperlink || '';
-        const plainNote = note ? stripHtml(note) : '';
-        const hasNote = !!plainNote;
+        const plainNote = note ? stripHtml(note).trim() : '';
+        const hasNote = hasVisibleNoteContent(note);
         const hasLink = !!hyperlink;
         // 标准化标签格式
         const normTags = tags.map(t => typeof t === 'string' ? { text: t, color: autoTagColor(t) } : t);
@@ -1633,7 +1679,7 @@ function updatePropertyPanelForFloatingNode(fn) {
             <div class="property-group">
                 <div class="property-group-label">备注</div>
                 <button class="property-btn ${hasNote ? 'has-content' : ''}" id="pf-edit-note">
-                    ${hasNote ? '📝 ' + escapeHtml(plainNote.substring(0, 30)) + (plainNote.length > 30 ? '...' : '') : '📝 添加备注...'}
+                    ${hasNote ? '📝 ' + (plainNote ? escapeHtml(plainNote.substring(0, 30)) + (plainNote.length > 30 ? '...' : '') : '[图片/富文本]') : '📝 添加备注...'}
                 </button>
             </div>
 
@@ -1767,12 +1813,10 @@ function openFloatNoteEditor(fn) {
         }
         
         let noteHtml = '';
-        let plainText = '';
         if (wangEditorInstance) {
             noteHtml = wangEditorInstance.getHtml();
-            plainText = wangEditorInstance.getText().trim();
         }
-        const finalNote = plainText ? noteHtml : null;
+        const finalNote = hasVisibleNoteContent(noteHtml) ? noteHtml : null;
         
         fn.data.note = finalNote;
         isDirty = true;
@@ -2128,6 +2172,38 @@ function initMindMap(data) {
 
     mindMap = new MindMap(config);
     window.mindMap = mindMap;
+
+    // 注册自定义快捷键
+    if (mindMap.keyCommand && typeof mindMap.keyCommand.addShortcut === 'function') {
+        mindMap.keyCommand.addShortcut('Spacebar|Space|space', () => {
+            // 检查是否有选中的浮动节点
+            const activeFloatingNode = floatingNodes.find(n => n.data.isActive);
+            if (activeFloatingNode) {
+                startFloatingNodeEdit(activeFloatingNode);
+                return;
+            }
+            if (window._selectedFloatingNode) {
+                startFloatingNodeEdit(window._selectedFloatingNode);
+                return;
+            }
+            
+            // 检查是否有选中的普通节点
+            const activeNodes = mindMap.renderer.activeNodeList;
+            if (activeNodes && activeNodes.length > 0) {
+                const activeNode = activeNodes[0];
+                if (mindMap.core && mindMap.core.textEdit) {
+                    mindMap.core.textEdit.show({ node: activeNode });
+                } else if (mindMap.renderer && mindMap.renderer.textEdit) {
+                    if (typeof mindMap.renderer.textEdit.show === 'function') {
+                        mindMap.renderer.textEdit.show({ node: activeNode });
+                    } else if (typeof mindMap.renderer.textEdit.showEditTextBox === 'function') {
+                        mindMap.renderer.textEdit.showEditTextBox(activeNode);
+                    }
+                }
+            }
+        });
+    }
+
     // 包裹 renderAllLines 以自动恢复关联线箭头状态
     patchRenderAllLines();
 
@@ -2698,7 +2774,7 @@ function stripHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
     div.innerHTML = text;
-    return div.textContent.trim();
+    return (div.textContent || div.innerText || '').trim();
 }
 
 // ============ Property Panel (Style, Tags, Notes, Links) ============
@@ -2757,8 +2833,8 @@ function updatePropertyPanel() {
     const tags = data.tag || [];
     const note = data.note || '';
     const hyperlink = data.hyperlink || '';
-    const plainNote = note ? stripHtml(note) : '';
-    const hasNote = !!plainNote;
+    const plainNote = note ? stripHtml(note).trim() : '';
+    const hasNote = hasVisibleNoteContent(note);
     const hasLink = !!hyperlink;
 
     body.innerHTML = `
@@ -2853,7 +2929,7 @@ function updatePropertyPanel() {
         <div class="property-group">
             <div class="property-group-label">备注</div>
             <button class="property-btn ${hasNote ? 'has-content' : ''}" id="prop-edit-note">
-                ${hasNote ? '📝 ' + escapeHtml(plainNote.substring(0, 30)) + (plainNote.length > 30 ? '...' : '') : '📝 添加备注...'}
+                ${hasNote ? '📝 ' + (plainNote ? escapeHtml(plainNote.substring(0, 30)) + (plainNote.length > 30 ? '...' : '') : '[图片/富文本]') : '📝 添加备注...'}
             </button>
         </div>
 
@@ -3264,9 +3340,7 @@ function setupTagEditor(node) {
             return;
         }
         tags.push(tag);
-        node.setData({ tag: tags });
-        mindMap.render();
-        mindMap.command.addHistory();
+        mindMap.execCommand('SET_NODE_TAG', node, tags);
         input.value = '';
         updatePropertyPanel();
     }
@@ -3283,9 +3357,7 @@ function setupTagEditor(node) {
             const tags = node.getData('tag') || [];
             const idx = tags.indexOf(tag);
             if (idx > -1) tags.splice(idx, 1);
-            node.setData({ tag: tags });
-            mindMap.render();
-            mindMap.command.addHistory();
+            mindMap.execCommand('SET_NODE_TAG', node, tags);
             updatePropertyPanel();
         });
     });
@@ -3305,6 +3377,11 @@ function initNoteEditorIfNeeded() {
                 menuKeys: [] // 清空选中文本时弹出的悬浮菜单
             }
         },
+        MENU_CONF: {
+            uploadImage: {
+                base64LimitSize: 10 * 1024 * 1024 // 10MB, convert to base64
+            }
+        },
         onChange(editor) {
             // console.log('editor content', editor.getHtml());
         }
@@ -3316,7 +3393,7 @@ function initNoteEditorIfNeeded() {
         mode: 'default'
     });
     
-    // 支持Tab键缩进
+    // 支持Tab键缩进和回车键清除缩进
     document.getElementById('editor-container').addEventListener('keydown', (e) => {
         if (e.key === 'Tab') {
             e.preventDefault();
@@ -3342,6 +3419,29 @@ function initNoteEditorIfNeeded() {
             if (wangEditorInstance && typeof wangEditorInstance.handleCommand === 'function') {
                 wangEditorInstance.handleCommand(menuKey);
             }
+        } else if (e.key === 'Enter' && !e.shiftKey) {
+            // 阻止默认行为，手动执行换行，以确保同步获取到新生成的块
+            e.preventDefault();
+            if (wangEditorInstance) {
+                wangEditorInstance.insertBreak();
+
+                if (window.wangEditor && window.wangEditor.SlateTransforms && window.wangEditor.SlateEditor) {
+                    const { SlateTransforms, SlateEditor } = window.wangEditor;
+                    const match = SlateEditor.above(wangEditorInstance, {
+                        match: n => SlateEditor.isBlock(wangEditorInstance, n)
+                    });
+                    if (match) {
+                        const [block, path] = match;
+                        // 仅在段落中移除所有不必要的样式属性，确保完全靠左对齐
+                        if (block && block.type === 'paragraph') {
+                            const propsToRemove = Object.keys(block).filter(key => key !== 'type' && key !== 'children');
+                            if (propsToRemove.length > 0) {
+                                SlateTransforms.unsetNodes(wangEditorInstance, propsToRemove, { at: path });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }, true); // 使用捕获阶段
 
@@ -3351,7 +3451,8 @@ function initNoteEditorIfNeeded() {
             'color', 'bgColor', '|',
             'bulletedList', 'numberedList', '|',
             'justifyLeft', 'justifyCenter', 'justifyRight', '|',
-            'indent', 'delIndent'
+            'indent', 'delIndent', '|',
+            'insertImage', 'uploadImage'
         ]
     };
     createToolbar({
@@ -3396,18 +3497,16 @@ function openNoteEditor(node) {
         }
 
         let noteHtml = '';
-        let plainText = '';
         if (wangEditorInstance) {
             noteHtml = wangEditorInstance.getHtml();
-            plainText = wangEditorInstance.getText().trim();
         }
-        const finalNote = plainText ? noteHtml : null;
+        const finalNote = hasVisibleNoteContent(noteHtml) ? noteHtml : null;
         
-        node.setData({ note: finalNote });
-        mindMap.render();
-        mindMap.command.addHistory();
+        mindMap.execCommand('SET_NODE_NOTE', node, finalNote);
         closeModal('modal-note');
         updatePropertyPanel();
+        // 因为可能是摘要节点，需重新绑定事件
+        setTimeout(renderSummaryPlusButtons, 50);
         showToast(finalNote ? '备注已保存' : '备注已移除');
     };
 }
@@ -3511,22 +3610,15 @@ function openLinkEditor(node) {
 
     document.getElementById('modal-link-save').onclick = () => {
         const url = linkInput.value.trim();
-        node.setData({ hyperlink: url || null });
-        if (url && textInput.value.trim()) {
-            node.setData({ hyperlinkText: textInput.value.trim() });
-        }
-        mindMap.render();
-        mindMap.command.addHistory();
+        const title = textInput.value.trim();
+        mindMap.execCommand('SET_NODE_HYPERLINK', node, url || '', title);
         closeModal('modal-link');
         updatePropertyPanel();
         showToast(url ? '链接已保存' : '链接已移除');
     };
 
     document.getElementById('modal-link-remove').onclick = () => {
-        node.setData({ hyperlink: null });
-        node.setData({ hyperlinkText: null });
-        mindMap.render();
-        mindMap.command.addHistory();
+        mindMap.execCommand('SET_NODE_HYPERLINK', node, '', '');
         closeModal('modal-link');
         updatePropertyPanel();
         showToast('链接已移除');
@@ -4164,8 +4256,9 @@ function renderSummaryPlusButtons() {
                 // 获取实际的摘要节点 UID 和实例
                 const belongNode = mindMap.renderer.findNodeByUid(elGenUid);
                 let actualGenNode = null;
-                if (belongNode && belongNode._generalizationList && belongNode._generalizationList.length > 0) {
-                    actualGenNode = belongNode._generalizationList[0].generalizationNode;
+                if (belongNode && belongNode._generalizationList) {
+                    const matchedItem = belongNode._generalizationList.find(g => g.generalizationNode && g.generalizationNode.group && g.generalizationNode.group.node === genEl);
+                    if (matchedItem) actualGenNode = matchedItem.generalizationNode;
                 }
 
                 if (actualGenNode) {
@@ -4189,19 +4282,28 @@ function renderSummaryPlusButtons() {
                 return;
             }
 
+            // 获取实际的摘要节点
+            const belongNode = mindMap.renderer.findNodeByUid(elGenUid);
+            let actualGenNode = null;
+            if (belongNode && belongNode._generalizationList) {
+                const matchedItem = belongNode._generalizationList.find(g => g.generalizationNode && g.generalizationNode.group && g.generalizationNode.group.node === genEl);
+                if (matchedItem) actualGenNode = matchedItem.generalizationNode;
+            }
+
+            if (!actualGenNode) return;
+            const actualGenUid = actualGenNode.getData('uid');
+
             const prev = _activeGenUid;
             // 切换：点击同一个摘要取消选中，点击其他摘要切换
-            _activeGenUid = (prev === elGenUid) ? null : elGenUid;
+            _activeGenUid = (prev === actualGenUid) ? null : actualGenUid;
             
             // 我们希望能够显示摘要节点的属性面板，因此将该摘要节点加入 activeNodeCache
             // 而不要清除 activeNodeList，或者只清除但保留该摘要节点。
-            const belongNode = mindMap.renderer.findNodeByUid(elGenUid);
-            if (belongNode && belongNode._generalizationList && belongNode._generalizationList.length > 0) {
-                const actualGenNode = belongNode._generalizationList[0].generalizationNode;
+            if (_activeGenUid) {
                 // 让核心库选中该节点（如果它尚未被选中）
                 if (mindMap && mindMap.renderer) {
                     try {
-                        mindMap.execCommand('ACTIVE_NODE', [actualGenNode.getData('uid')]);
+                        mindMap.execCommand('ACTIVE_NODE', [actualGenUid]);
                     } catch(e) {}
                 }
                 activeNodeCache = [actualGenNode];
@@ -4214,6 +4316,31 @@ function renderSummaryPlusButtons() {
             renderFloatingNodes();
             updatePropertyPanel();
             renderSummaryPlusButtons();
+        });
+
+        // 修复：为摘要节点增加鼠标悬浮事件，显示备注内容
+        genEl.addEventListener('mousemove', (e) => {
+            const noteIcon = e.target.closest && e.target.closest('.smm-node-note');
+            if (noteIcon) {
+                const belongNode = mindMap.renderer.findNodeByUid(elGenUid);
+                if (belongNode && belongNode._generalizationList) {
+                    const matchedItem = belongNode._generalizationList.find(g => g.generalizationNode && g.generalizationNode.group && g.generalizationNode.group.node === genEl);
+                    if (matchedItem) {
+                        const actualGenNode = matchedItem.generalizationNode;
+                        const noteHtml = actualGenNode.getData('note');
+                        if (noteHtml) {
+                            const rect = noteIcon.getBoundingClientRect();
+                            showRichNoteTooltip(noteHtml, e.clientX + 12, e.clientY + 12, rect);
+                        }
+                    }
+                }
+            } else {
+                hideRichNoteTooltip();
+            }
+        });
+
+        genEl.addEventListener('mouseleave', () => {
+            hideRichNoteTooltip();
         });
     });
 
@@ -4315,16 +4442,19 @@ function renderSummaryPlusButtons() {
             const cls = genEl.getAttribute('class') || '';
             const uidMatch = cls.match(/generalization_(\S+)/);
             const belongUid = uidMatch ? uidMatch[1] : null;
-            if (!belongUid || belongUid !== _activeGenUid) return;
+            if (!belongUid) return;
             
-            // 获取实际的摘要节点 UID
+            // 获取实际的摘要节点
             const belongNode = mindMap.renderer.findNodeByUid(belongUid);
-            let actualGenUid = belongUid;
-            if (belongNode && belongNode._generalizationList && belongNode._generalizationList.length > 0) {
-                actualGenUid = belongNode._generalizationList[0].generalizationNode.getData('uid');
+            let actualGenNode = null;
+            if (belongNode && belongNode._generalizationList) {
+                const matchedItem = belongNode._generalizationList.find(g => g.generalizationNode && g.generalizationNode.group && g.generalizationNode.group.node === genEl);
+                if (matchedItem) actualGenNode = matchedItem.generalizationNode;
             }
             
-            renderPlusBtnForElement(genEl, actualGenUid, true);
+            if (actualGenNode && actualGenNode.getData('uid') === _activeGenUid) {
+                renderPlusBtnForElement(genEl, _activeGenUid, true);
+            }
         });
     }
 
@@ -4388,10 +4518,8 @@ function initIconsPanel() {
                     activeNodes.forEach(node => {
                         const currentIcons = node.getData('icon') || [];
                         currentIcons.push('<' + btn.dataset.icon + '>');
-                        node.setData({ icon: currentIcons });
+                        mindMap.execCommand('SET_NODE_ICON', node, currentIcons);
                     });
-                    mindMap.render();
-                    mindMap.command.addHistory();
                 } else {
                     showToast('请先选中一个节点');
                 }
@@ -4830,9 +4958,88 @@ document.addEventListener('keydown', (e) => {
         }
         return;
     }
-});
+}, true);
 
 
+
+// ============ Image Preview ============
+function showImagePreview(src) {
+    // 创建遮罩层
+    const overlay = document.createElement('div');
+    overlay.className = 'image-preview-overlay';
+    
+    // 创建图片容器
+    const imgContainer = document.createElement('div');
+    imgContainer.className = 'image-preview-container';
+    
+    // 创建图片元素
+    const img = document.createElement('img');
+    img.src = src;
+    img.className = 'image-preview-img';
+    
+    let scale = 1;
+    let translateX = 0;
+    let translateY = 0;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    
+    // 滚轮缩放事件
+    imgContainer.addEventListener('wheel', (e) => {
+        e.preventDefault(); // 阻止默认滚动
+        
+        // 放大/缩小逻辑
+        if (e.deltaY < 0) {
+            scale *= 1.1; // 放大
+        } else {
+            scale /= 1.1; // 缩小
+        }
+        
+        // 限制缩放范围 (比如 0.1 到 10)
+        scale = Math.max(0.1, Math.min(scale, 10));
+        
+        img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    }, { passive: false });
+    
+    // 拖拽逻辑
+    img.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        isDragging = true;
+        startX = e.clientX - translateX;
+        startY = e.clientY - translateY;
+        img.style.cursor = 'grabbing';
+    });
+    
+    const onMouseMove = (e) => {
+        if (!isDragging) return;
+        translateX = e.clientX - startX;
+        translateY = e.clientY - startY;
+        img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    };
+    
+    const onMouseUp = () => {
+        if (isDragging) {
+            isDragging = false;
+            img.style.cursor = 'grab';
+        }
+    };
+    
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    
+    // 点击遮罩层关闭弹窗
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay || e.target === imgContainer) {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+            document.body.removeChild(overlay);
+        }
+    });
+    
+    imgContainer.appendChild(img);
+    overlay.appendChild(imgContainer);
+    document.body.appendChild(overlay);
+}
 
 // ============ Init ============
 
