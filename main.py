@@ -20,9 +20,9 @@ app.include_router(mindmap_router, prefix="/api")
 def index():
     return FileResponse(Path("static/index.html"))
 
+
 if __name__ == "__main__":
     if sys.platform == "win32":
         import ctypes
         ctypes.windll.kernel32.SetConsoleTitleW("AI Mind Server")
-    # 使用 ai-mind.exe 启动可使任务管理器显示为 "ai-mind" 而非 "python"
     uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True, reload_excludes=["data/*"])

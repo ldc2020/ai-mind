@@ -44,7 +44,8 @@ html, body {
     gap: 4px;
     user-select: none;
     -webkit-app-region: drag;
-    overflow-x: auto;
+    overflow: visible;
+    z-index: 100;
 }
 
 .toolbar-group {
@@ -245,6 +246,207 @@ html, body {
     text-align: center;
     padding: 20px;
     font-size: 12px;
+}
+
+/* ============ Toolbar Dropdown ============ */
+.toolbar-dropdown {
+    position: relative;
+    display: inline-flex;
+}
+
+.dropdown-arrow {
+    width: 10px;
+    height: 10px;
+    transition: transform 0.15s;
+}
+
+.toolbar-dropdown.open .dropdown-arrow {
+    transform: rotate(180deg);
+}
+
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    min-width: 180px;
+    z-index: 9999;
+    padding: 4px;
+}
+
+.toolbar-dropdown.open .dropdown-menu {
+    display: block;
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    text-align: left;
+    transition: background 0.15s;
+}
+
+.dropdown-item:hover {
+    background: var(--bg-secondary);
+}
+
+.dropdown-item svg {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+/* ============ File Tree ============ */
+.file-tree {
+    user-select: none;
+}
+
+.file-tree-children {
+    /* padding-left 由 js 中的 depth 动态计算，这里无需叠加 */
+}
+
+/* 树节点条目 */
+.file-tree-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 6px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-bottom: 1px;
+}
+
+.file-tree-item:hover {
+    background: var(--bg-secondary);
+}
+
+.file-tree-item.active {
+    background: var(--accent-light);
+}
+
+/* 拖拽状态 */
+.file-tree-item.dragging {
+    opacity: 0.4;
+}
+
+.file-tree-item.drag-over {
+    background: var(--accent-light);
+    outline: 2px dashed var(--accent);
+    outline-offset: -2px;
+}
+
+.file-tree-item.drag-before {
+    border-top: 2px solid var(--accent);
+}
+
+.file-tree-item.drag-after {
+    border-bottom: 2px solid var(--accent);
+}
+
+/* 展开/折叠三角 */
+.file-tree-toggle {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: transform 0.15s;
+    flex-shrink: 0;
+    font-size: 10px;
+}
+
+.file-tree-toggle:hover {
+    color: var(--text-primary);
+}
+
+.file-tree-toggle.collapsed {
+    transform: rotate(-90deg);
+}
+
+.file-tree-toggle.placeholder {
+    visibility: hidden;
+}
+
+/* 文件/文件夹图标 */
+.file-tree-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 12px;
+}
+
+.file-tree-icon.file {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+
+.file-tree-icon.folder {
+    background: #fef3c7;
+    color: #d97706;
+}
+
+/* 名称 */
+.file-tree-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-tree-name-input {
+    flex: 1;
+    min-width: 40px;
+    padding: 2px 4px;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    font-size: 12px;
+    outline: none;
+    background: var(--bg-primary);
+}
+
+/* 删除按钮 */
+.file-tree-delete {
+    opacity: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 14px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.file-tree-item:hover .file-tree-delete {
+    opacity: 1;
+}
+
+.file-tree-delete:hover {
+    background: #fee;
+    color: #e55;
 }
 
 /* ============ Outline ============ */

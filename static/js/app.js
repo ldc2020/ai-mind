@@ -2489,13 +2489,77 @@ async function autoSave() {
 
 async function loadFileList() {
     try {
-        const res = await fetch('/api/mindmaps');
-        const data = await res.json();
-        renderFileList(data.mindmaps);
-        renderOpenFileList(data.mindmaps);
+        // 侧边栏用树状结构
+        const treeRes = await fetch('/api/tree');
+        if (!treeRes.ok) {
+            console.warn('/api/tree 失败，回退到平铺列表');
+            const mapsRes = await fetch('/api/mindmaps');
+            const mapsData = await mapsRes.json();
+            renderOpenFileList(mapsData.mindmaps);
+            // 用平铺列表填充侧边栏
+            renderFileListFallback(mapsData.mindmaps);
+            return;
+        }
+        const treeData = await treeRes.json();
+        if (!treeData.tree || !Array.isArray(treeData.tree)) {
+            console.warn('/api/tree 返回数据异常，回退到平铺列表', treeData);
+            const mapsRes = await fetch('/api/mindmaps');
+            const mapsData = await mapsRes.json();
+            renderOpenFileList(mapsData.mindmaps);
+            renderFileListFallback(mapsData.mindmaps);
+            return;
+        }
+        renderFileTree(treeData.tree);
+        // 弹出窗用平铺列表（向后兼容）
+        const mapsRes = await fetch('/api/mindmaps');
+        const mapsData = await mapsRes.json();
+        renderOpenFileList(mapsData.mindmaps);
     } catch (err) {
         console.error('加载文件列表失败:', err);
+        // 最终回退
+        try {
+            const mapsRes = await fetch('/api/mindmaps');
+            const mapsData = await mapsRes.json();
+            renderOpenFileList(mapsData.mindmaps);
+            renderFileListFallback(mapsData.mindmaps);
+        } catch (e) {
+            document.getElementById('file-list').innerHTML = '<p class="empty-hint">加载失败，请刷新重试</p>';
+        }
     }
+}
+
+// 回退渲染函数（平铺列表样式，用于树API不可用时）
+function renderFileListFallback(mindmaps) {
+    const list = document.getElementById('file-list');
+    if (!mindmaps || mindmaps.length === 0) {
+        list.innerHTML = '<p class="empty-hint">暂无文件，点击新建开始</p>';
+        return;
+    }
+    list.innerHTML = mindmaps.map(m => `
+        <div class="file-list-item" data-uid="${m.id}">
+            <div class="file-icon">
+                <svg viewBox="0 0 24 24" width="14" height="14"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" fill="currentColor"/></svg>
+            </div>
+            <div class="file-info">
+                <div class="file-name">${stripHtml(m.title)}</div>
+                <div class="file-date">${new Date(m.updated_at).toLocaleString()}</div>
+            </div>
+            <button class="file-delete" data-uid="${m.id}" title="删除">&times;</button>
+        </div>
+    `).join('');
+
+    list.querySelectorAll('.file-list-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            if (e.target.closest('.file-delete')) return;
+            loadMindMap(item.dataset.uid);
+        });
+    });
+    list.querySelectorAll('.file-delete').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteMindMap(btn.dataset.uid);
+        });
+    });
 }
 
 async function newMindMap() {
@@ -2513,6 +2577,80 @@ async function newMindMap() {
         loadFileList();
     } catch (err) {
         console.error('创建导图失败:', err);
+    }
+}
+
+/**
+ * 生成唯一的文件夹 ID
+ * @returns {string} 返回生成的唯一文件夹 ID
+ */
+function makeFolderId() {
+    // 首先尝试使用原生加密 API（需要在安全上下文中，如 localhost 或 HTTPS）
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return 'folder-' + crypto.randomUUID();
+    }
+    // 如果原生 API 不可用，使用 Math.random() 提供后备方案生成 UUID v4
+    return 'folder-' + 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+async function newFolder() {
+    const name = prompt('请输入文件夹名称：', '新建文件夹');
+    if (!name || !name.trim()) return;
+
+    const folderItem = {
+        type: 'folder',
+        id: makeFolderId(),
+        name: name.trim(),
+        isOpen: true,
+        children: []
+    };
+
+    // 方案A：调用专用API
+    try {
+        const res = await fetch('/api/folders/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim() }),
+        });
+        if (res.ok) {
+            loadFileList();
+            return;
+        }
+        console.warn('[newFolder] POST /api/folders 失败 (status=' + res.status + ')，回退到 /api/tree 方案');
+    } catch (e) {
+        console.warn('[newFolder] POST /api/folders 不可达，回退到 /api/tree 方案:', e.message);
+    }
+
+    // 方案B：直接用 /api/tree 操作
+    try {
+        const treeRes = await fetch('/api/tree');
+        if (!treeRes.ok) {
+            let detail = 'HTTP ' + treeRes.status;
+            try { const e = await treeRes.json(); detail = e.detail || detail; } catch (_) {}
+            throw new Error(detail);
+        }
+        const treeData = await treeRes.json();
+        const tree = treeData.tree || [];
+        tree.push(folderItem);
+
+        const putRes = await fetch('/api/tree/save', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tree }),
+        });
+        if (!putRes.ok) {
+            let detail = 'HTTP ' + putRes.status;
+            try { const e = await putRes.json(); detail = e.detail || detail; } catch (_) {}
+            showToast(detail);
+            return;
+        }
+        loadFileList();
+    } catch (err) {
+        console.error('[newFolder] 回退方案也失败:', err);
+        showToast(err.message || '创建文件夹失败');
     }
 }
 
@@ -2576,29 +2714,79 @@ async function loadMindMap(uid) {
     }
 }
 
-async function deleteMindMap(uid) {
-    if (!confirm('确定删除此文件？')) return;
-    try {
-        await fetch(`/api/mindmaps/${uid}`, { method: 'DELETE' });
-        // 先清空 currentUid，避免后续 autoSave 把数据写回已删除的文件
-        if (currentUid === uid) {
-            currentUid = null;
-            localStorage.removeItem('ai_mind_last_opened_uid');
-        }
-        loadFileList();
-        // 如果删的是当前文件，自动切换到第一个文件或新建
-        if (!currentUid) {
-            const res = await fetch('/api/mindmaps');
-            const data = await res.json();
-            if (data.mindmaps && data.mindmaps.length > 0) {
-                loadMindMap(data.mindmaps[0].id);
-            } else {
-                await newMindMap();
+async function deleteItem(id, type) {
+    if (type === 'folder') {
+        if (!confirm('确定删除此文件夹？')) return;
+        // 方案A：调用专用API
+        try {
+            const res = await fetch(`/api/folders/${id}`, { method: 'DELETE' });
+            if (res.ok) { loadFileList(); return; }
+        } catch (e) { /* 回退 */ }
+
+        // 方案B：通过 /api/tree 操作
+        try {
+            const treeRes = await fetch('/api/tree');
+            if (!treeRes.ok) throw new Error('无法获取文件树');
+            const treeData = await treeRes.json();
+            const tree = treeData.tree || [];
+
+            // 递归删除文件夹
+            function removeById(items, targetId) {
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].id === targetId) {
+                        if (items[i].children && items[i].children.length > 0) {
+                            showToast('文件夹不为空，无法删除');
+                            return false;
+                        }
+                        items.splice(i, 1);
+                        return true;
+                    }
+                    if (items[i].type === 'folder' && items[i].children) {
+                        if (removeById(items[i].children, targetId)) return true;
+                    }
+                }
+                return false;
             }
+
+            if (!removeById(tree, id)) return;
+            const putRes = await fetch('/api/tree/save', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tree }),
+            });
+            if (!putRes.ok) throw new Error('保存失败');
+            loadFileList();
+        } catch (err) {
+            console.error('删除文件夹失败:', err);
+            showToast('删除文件夹失败');
         }
-    } catch (err) {
-        console.error('删除失败:', err);
+    } else {
+        if (!confirm('确定删除此文件？')) return;
+        try {
+            await fetch(`/api/mindmaps/${id}`, { method: 'DELETE' });
+            if (currentUid === id) {
+                currentUid = null;
+                localStorage.removeItem('ai_mind_last_opened_uid');
+            }
+            loadFileList();
+            if (!currentUid) {
+                const res = await fetch('/api/mindmaps');
+                const data = await res.json();
+                if (data.mindmaps && data.mindmaps.length > 0) {
+                    loadMindMap(data.mindmaps[0].id);
+                } else {
+                    await newMindMap();
+                }
+            }
+        } catch (err) {
+            console.error('删除失败:', err);
+        }
     }
+}
+
+// 保留旧函数名向后兼容
+async function deleteMindMap(uid) {
+    return deleteItem(uid, 'file');
 }
 
 // ============ Node Deletion ============
@@ -2630,38 +2818,284 @@ function deleteActiveNode() {
 }
 
 // ============ Render Functions ============
-function renderFileList(mindmaps) {
+
+// 拖拽状态
+let _dragItemId = null;
+let _dragItemType = null;
+
+function renderFileTree(tree) {
     const list = document.getElementById('file-list');
-    if (!mindmaps || mindmaps.length === 0) {
-        list.innerHTML = '<p class="empty-hint">暂无文件</p>';
+    if (!tree || tree.length === 0) {
+        list.innerHTML = '<p class="empty-hint">暂无文件，点击新建开始</p>';
         return;
     }
-    list.innerHTML = mindmaps.map(m => `
-        <div class="file-list-item" data-uid="${m.id}">
-            <div class="file-icon">
-                <svg viewBox="0 0 24 24" width="14" height="14"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" fill="currentColor"/></svg>
-            </div>
-            <div class="file-info">
-                <div class="file-name">${stripHtml(m.title)}</div>
-                <div class="file-date">${new Date(m.updated_at).toLocaleString()}</div>
-            </div>
-            <button class="file-delete" data-uid="${m.id}" title="删除">&times;</button>
-        </div>
-    `).join('');
+    list.innerHTML = '<div class="file-tree" id="file-tree-root" style="min-height: 100px;"></div>';
+    const root = document.getElementById('file-tree-root');
+    renderTreeNodes(tree, root, 0);
 
-    list.querySelectorAll('.file-list-item').forEach(item => {
-        item.addEventListener('click', (e) => {
-            if (e.target.closest('.file-delete')) return;
-            loadMindMap(item.dataset.uid);
-        });
+    // 允许拖拽到空白区域（根目录）
+    root.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (_dragItemId) {
+            e.dataTransfer.dropEffect = 'move';
+        }
     });
 
-    list.querySelectorAll('.file-delete').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+    root.addEventListener('drop', async (e) => {
+        // 如果是从条目冒泡上来的事件，或者是放在具体条目上，忽略
+        if (e.target.closest('.file-tree-item')) return;
+        
+        e.preventDefault();
+        if (!_dragItemId) return;
+
+        try {
+            const res = await fetch('/api/tree/move', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    item_id: _dragItemId,
+                    new_parent_id: null, // 根级别
+                    new_index: 999999, // 放在最后
+                }),
+            });
+            if (res.ok) {
+                loadFileList();
+            }
+        } catch (err) {
+            console.error('移动到根目录失败:', err);
+        }
+    });
+}
+
+function renderTreeNodes(nodes, parentEl, depth) {
+    nodes.forEach(node => {
+        const el = renderTreeNode(node, depth);
+        parentEl.appendChild(el);
+        
+        if (node.type === 'folder') {
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'file-tree-children';
+            childrenContainer.dataset.parentId = node.id;
+            if (node.isOpen === false) {
+                childrenContainer.style.display = 'none';
+            }
+            parentEl.appendChild(childrenContainer);
+            
+            if (node.children && node.children.length > 0) {
+                renderTreeNodes(node.children, childrenContainer, depth + 1);
+            }
+        }
+    });
+}
+
+function renderTreeNode(node, depth) {
+    const isFolder = node.type === 'folder';
+    const isFile = node.type === 'file';
+    const itemId = node.id;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'file-tree-item';
+    wrapper.dataset.itemId = itemId;
+    wrapper.dataset.itemType = node.type;
+    wrapper.style.paddingLeft = (depth * 16 + 6) + 'px';
+    wrapper.draggable = true;
+
+    // 当前打开的文件高亮
+    if (isFile && itemId === currentUid) {
+        wrapper.classList.add('active');
+    }
+
+    // --- 展开/折叠三角 ---
+    const toggle = document.createElement('span');
+    toggle.className = 'file-tree-toggle';
+    if (isFolder) {
+        toggle.innerHTML = '&#9660;';
+        if (node.isOpen !== false) {
+            // 默认展开
+        } else {
+            toggle.classList.add('collapsed');
+        }
+        toggle.addEventListener('click', (e) => {
             e.stopPropagation();
-            deleteMindMap(btn.dataset.uid);
+            toggleFolder(itemId);
+        });
+    } else {
+        toggle.classList.add('placeholder');
+    }
+    wrapper.appendChild(toggle);
+
+    // --- 图标 ---
+    const icon = document.createElement('span');
+    icon.className = 'file-tree-icon ' + (isFolder ? 'folder' : 'file');
+    if (isFolder) {
+        icon.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z" fill="currentColor"/></svg>';
+    } else {
+        icon.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" fill="currentColor"/></svg>';
+    }
+    wrapper.appendChild(icon);
+
+    // --- 名称 ---
+    const nameEl = document.createElement('span');
+    nameEl.className = 'file-tree-name';
+    nameEl.textContent = isFolder ? node.name : (stripHtml(node.title) || node.id);
+    wrapper.appendChild(nameEl);
+
+    // --- 删除按钮 ---
+    const delBtn = document.createElement('button');
+    delBtn.className = 'file-tree-delete';
+    delBtn.textContent = '\u00D7';
+    delBtn.title = isFolder ? '删除文件夹' : '删除文件';
+    delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteItem(itemId, node.type);
+    });
+    wrapper.appendChild(delBtn);
+
+    // --- 点击事件 ---
+    wrapper.addEventListener('click', (e) => {
+        if (e.target.closest('.file-tree-delete') || e.target.closest('.file-tree-toggle')) return;
+        if (isFile) {
+            loadMindMap(itemId);
+        } else {
+            toggleFolder(itemId);
+        }
+    });
+
+    // --- 拖拽事件 ---
+    wrapper.addEventListener('dragstart', (e) => {
+        _dragItemId = itemId;
+        _dragItemType = node.type;
+        wrapper.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', itemId);
+    });
+
+    wrapper.addEventListener('dragend', (e) => {
+        wrapper.classList.remove('dragging');
+        _dragItemId = null;
+        _dragItemType = null;
+        // 移除所有高亮
+        document.querySelectorAll('.file-tree-item.drag-over, .file-tree-item.drag-before, .file-tree-item.drag-after').forEach(el => {
+            el.classList.remove('drag-over', 'drag-before', 'drag-after');
         });
     });
+
+    wrapper.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (!_dragItemId || _dragItemId === itemId) return;
+        e.dataTransfer.dropEffect = 'move';
+
+        // 移除之前的高亮
+        document.querySelectorAll('.file-tree-item.drag-over, .file-tree-item.drag-before, .file-tree-item.drag-after').forEach(el => {
+            el.classList.remove('drag-over', 'drag-before', 'drag-after');
+        });
+
+        const rect = wrapper.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const h = rect.height;
+
+        // 如果是文件夹且鼠标在中部区域（25%-75%），高亮为"拖入文件夹"
+        if (isFolder && y > h * 0.25 && y < h * 0.75) {
+            wrapper.classList.add('drag-over');
+        } else {
+            if (y <= h / 2) {
+                wrapper.classList.add('drag-before');
+            } else {
+                wrapper.classList.add('drag-after');
+            }
+        }
+    });
+
+    wrapper.addEventListener('dragleave', (e) => {
+        wrapper.classList.remove('drag-over', 'drag-before', 'drag-after');
+    });
+
+    wrapper.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        wrapper.classList.remove('drag-over', 'drag-before', 'drag-after');
+
+        if (!_dragItemId || _dragItemId === itemId) return;
+
+        const rect = wrapper.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const h = rect.height;
+
+        // 判断放置位置
+        let targetParentId = null;  // null = 根级别
+        let targetIndex = 0;
+
+        // 获取当前条目的父级
+        const parentEl = wrapper.parentElement;
+        const siblings = Array.from(parentEl.children).filter(c => c.classList.contains('file-tree-item'));
+
+        if (isFolder && y > h * 0.25 && y < h * 0.75) {
+            // 拖入文件夹内部
+            targetParentId = itemId;
+            targetIndex = 0;  // 放在文件夹的第一个位置
+        } else {
+            // 在同级排序
+            // 找到该条目在父级中的索引
+            targetIndex = siblings.indexOf(wrapper);
+            if (y > h / 2) {
+                targetIndex++;  // 放在目标后面
+            }
+            // 获取父文件夹ID
+            if (parentEl.classList.contains('file-tree-children')) {
+                targetParentId = parentEl.dataset.parentId;
+            } else {
+                targetParentId = null;
+            }
+        }
+
+        try {
+            const res = await fetch('/api/tree/move', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    item_id: _dragItemId,
+                    new_parent_id: targetParentId,
+                    new_index: targetIndex,
+                }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                showToast(err.detail || '移动失败');
+                return;
+            }
+            loadFileList();
+        } catch (err) {
+            console.error('移动失败:', err);
+            showToast('移动失败');
+        }
+    });
+
+    // --- 子节点容器（仅文件夹） ---
+    // 已移至 renderTreeNodes 中处理，使其成为兄弟节点以修复排版问题
+
+    return wrapper;
+}
+
+function toggleFolder(folderId) {
+    const item = document.querySelector(`.file-tree-item[data-item-id="${folderId}"]`);
+    if (!item) return;
+    const toggle = item.querySelector('.file-tree-toggle');
+    const children = item.nextElementSibling;
+    if (!children || !children.classList.contains('file-tree-children')) return;
+
+    const isCollapsed = toggle.classList.contains('collapsed');
+    if (isCollapsed) {
+        toggle.classList.remove('collapsed');
+        children.style.display = '';
+    } else {
+        toggle.classList.add('collapsed');
+        children.style.display = 'none';
+    }
+}
+
+// 保留旧函数名向后兼容
+function renderFileList(mindmaps) {
+    // 不再使用，但保留以避免引用错误
+    console.warn('renderFileList is deprecated, use renderFileTree instead');
 }
 
 function renderOpenFileList(mindmaps) {
@@ -4542,8 +4976,38 @@ document.querySelectorAll('[data-layout]').forEach(btn => {
     });
 });
 
-// File operations
-document.getElementById('btn-new').addEventListener('click', newMindMap);
+// File operations - 新建按钮下拉菜单
+(function initNewDropdown() {
+    const wrapper = document.getElementById('btn-new-wrapper');
+    const btn = document.getElementById('btn-new');
+    const dropdown = document.getElementById('new-dropdown');
+    if (!wrapper || !btn || !dropdown) return;
+
+    // 点击按钮切换下拉菜单
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        wrapper.classList.toggle('open');
+    });
+
+    // 下拉菜单选项点击
+    dropdown.querySelectorAll('.dropdown-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            wrapper.classList.remove('open');
+            const action = item.dataset.action;
+            if (action === 'new-mindmap') {
+                newMindMap();
+            } else if (action === 'new-folder') {
+                newFolder();
+            }
+        });
+    });
+
+    // 点击页面其他地方关闭下拉菜单
+    document.addEventListener('click', () => {
+        wrapper.classList.remove('open');
+    });
+})();
 document.getElementById('btn-save').addEventListener('click', saveMindMap);
 document.getElementById('btn-open').addEventListener('click', () => {
     loadFileList();
