@@ -3800,11 +3800,78 @@ function setupTagEditor(node) {
 // ============ Note Editor ============
 let isNoteEditorInitialized = false;
 
+// --- 注册自定义富文本代码块 ---
+if (window.wangEditor && window.wangEditor.Boot) {
+    const { Boot } = window.wangEditor;
+
+    const renderRichCode = (elem, children, editor) => {
+        return {
+            sel: 'div',
+            data: {
+                className: 'rich-code-block'
+            },
+            children: children
+        };
+    };
+
+    const richCodeToHtml = (elem, childrenHtml) => {
+        return `<div class="rich-code-block">${childrenHtml}</div>`;
+    };
+
+    const parseHtmlRichCode = (domElem, children, editor) => {
+        return {
+            type: 'rich-code',
+            children: children
+        };
+    };
+
+    class RichCodeMenu {
+        constructor() {
+            this.title = '浅色富文本代码块';
+            this.iconSvg = '<svg viewBox="0 0 1024 1024"><path d="M741.05 450.91l-149.3-149.3c-18.75-18.75-49.14-18.75-67.88 0s-18.75 49.14 0 67.88l115.35 115.35-115.35 115.35c-18.75 18.75-18.75 49.14 0 67.88 9.38 9.38 21.66 14.06 33.94 14.06s24.57-4.69 33.94-14.06l149.3-149.3c18.75-18.74 18.75-49.13 0-67.86zM494.62 301.61c-18.75-18.75-49.14-18.75-67.88 0l-149.3 149.3c-18.75 18.75-18.75 49.14 0 67.88l149.3 149.3c9.38 9.38 21.66 14.06 33.94 14.06s24.57-4.69 33.94-14.06c18.75-18.75 18.75-49.14 0-67.88L379.27 484.85l115.35-115.35c18.75-18.76 18.75-49.15 0-67.89z" fill="currentColor"></path></svg>';
+            this.tag = 'button';
+        }
+        getValue(editor) { return ''; }
+        isActive(editor) {
+            const { SlateEditor } = window.wangEditor;
+            const match = SlateEditor.above(editor, { match: n => n.type === 'rich-code' });
+            return !!match;
+        }
+        isDisabled(editor) { return false; }
+        exec(editor, value) {
+            const { SlateTransforms, SlateEditor } = window.wangEditor;
+            const isActive = this.isActive(editor);
+            if (isActive) {
+                SlateTransforms.unwrapNodes(editor, { match: n => n.type === 'rich-code' });
+            } else {
+                SlateTransforms.wrapNodes(editor, { type: 'rich-code', children: [] }, { match: n => SlateEditor.isBlock(editor, n) });
+            }
+        }
+    }
+
+    try {
+        Boot.registerModule({
+            renderElems: [{ type: 'rich-code', renderElem: renderRichCode }],
+            elemsToHtml: [{ type: 'rich-code', elemToHtml: richCodeToHtml }],
+            parseElemsHtml: [{ selector: 'div.rich-code-block', parseElemHtml: parseHtmlRichCode }],
+            menus: [{ key: 'richCode', factory() { return new RichCodeMenu(); } }]
+        });
+    } catch (e) {
+        console.warn('richCode module already registered');
+    }
+}
+
 function initNoteEditorIfNeeded() {
     if (isNoteEditorInitialized) return;
     
-    const { createEditor, createToolbar } = window.wangEditor;
-    const editorConfig = {
+    if (!window.wangEditor) {
+        showToast('编辑器资源加载失败，请检查网络或刷新重试');
+        return;
+    }
+
+    try {
+        const { createEditor, createToolbar } = window.wangEditor;
+        const editorConfig = {
         placeholder: '输入备注内容...',
         hoverbarKeys: {
             text: {
@@ -3881,11 +3948,13 @@ function initNoteEditorIfNeeded() {
 
     const toolbarConfig = {
         toolbarKeys: [
+            'headerSelect', '|',
             'bold', 'underline', 'italic', 'through', 'clearStyle',
             'color', 'bgColor', '|',
             'bulletedList', 'numberedList', '|',
             'justifyLeft', 'justifyCenter', 'justifyRight', '|',
             'indent', 'delIndent', '|',
+            'richCode', 'divider', 'codeBlock', '|',
             'insertImage', 'uploadImage'
         ]
     };
@@ -3896,6 +3965,10 @@ function initNoteEditorIfNeeded() {
         mode: 'default'
     });
     isNoteEditorInitialized = true;
+    } catch (e) {
+        console.error('初始化编辑器失败:', e);
+        showToast('编辑器初始化失败');
+    }
 }
 
 let initialNoteContentForCompare = '';
@@ -4360,7 +4433,7 @@ async function parseXMind(buffer) {
         const JSZip = window.JSZip;
         if (!JSZip) {
             // 动态加载 JSZip
-            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+            await loadScript('/static/js/jszip.min.js');
         }
         const zip = await JSZip.loadAsync(buffer);
 
@@ -5186,10 +5259,17 @@ document.getElementById('search-next').addEventListener('click', searchNext);
 // ============ Modal Common Events ============
 function openModal(id) {
     document.getElementById(id).style.display = 'flex';
+    if (window.mindMap && mindMap.keyCommand && typeof mindMap.keyCommand.pause === 'function') {
+        mindMap.keyCommand.pause();
+    }
 }
 
 function closeModal(id) {
     document.getElementById(id).style.display = 'none';
+    const isAnyModalOpen = Array.from(document.querySelectorAll('.modal-overlay')).some(el => el.style.display === 'flex' || el.style.display === 'block');
+    if (!isAnyModalOpen && window.mindMap && mindMap.keyCommand && typeof mindMap.keyCommand.recovery === 'function') {
+        mindMap.keyCommand.recovery();
+    }
 }
 
 function handleNoteModalClose(isOverlayClick) {
@@ -5377,6 +5457,13 @@ document.addEventListener('keyup', (e) => {
 
 document.addEventListener('keydown', (e) => {
     const target = e.target;
+    
+    // 如果有任何模态框正在打开（或者事件源本身在模态框内），阻止触发底层的全局快捷键（如删除节点、保存、搜索等）
+    const isAnyModalOpen = Array.from(document.querySelectorAll('.modal-overlay')).some(el => el.style.display === 'flex' || el.style.display === 'block');
+    if (isAnyModalOpen || target.closest('.modal-overlay')) {
+        return;
+    }
+
     const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
     // Alt+Enter 换行支持（在 contentEditable 编辑节点文字时）

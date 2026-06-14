@@ -1181,6 +1181,17 @@ html, body {
 .rich-tooltip p:last-child {
     margin-bottom: 0;
 }
+.rich-tooltip h1, .rich-tooltip h2, .rich-tooltip h3, .rich-tooltip h4, .rich-tooltip h5 {
+    margin: 10px 0 6px 0;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text-primary);
+}
+.rich-tooltip h1 { font-size: 1.5em; }
+.rich-tooltip h2 { font-size: 1.3em; }
+.rich-tooltip h3 { font-size: 1.1em; }
+.rich-tooltip h4 { font-size: 1em; }
+.rich-tooltip h5 { font-size: 0.9em; }
 .rich-tooltip ul,
 .rich-tooltip ol {
     margin: 0 0 6px 0;
@@ -1208,6 +1219,46 @@ html, body {
 }
 .rich-tooltip a {
     color: var(--accent);
+}
+/* 新增：备注悬浮窗中分割线的样式 */
+.rich-tooltip hr {
+    border: 0;
+    height: 1px;
+    background: var(--border-color);
+    margin: 10px 0;
+}
+/* 新增：备注悬浮窗中代码块的样式，支持横向滚动和等宽字体 */
+.rich-tooltip pre {
+    background: var(--bg-secondary);
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    margin: 6px 0;
+    border: 1px solid var(--border-color);
+}
+/* 新增：备注悬浮窗中行内代码的样式 */
+.rich-tooltip code {
+    font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+    background: var(--bg-secondary);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 13px;
+}
+
+/* 新增：富文本代码块的样式（保留颜色、格式，带浅色背景和紧凑行距） */
+.rich-tooltip .rich-code-block, .w-e-text-container .rich-code-block {
+    background-color: var(--bg-secondary);
+    padding: 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+    line-height: 1.3;
+    margin: 6px 0;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
 }
 
 /* ---------------- 摘要节点 + 号按钮 ---------------- */
