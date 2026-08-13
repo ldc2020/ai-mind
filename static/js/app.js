@@ -17,6 +17,9 @@ let _floatingNodeEditingUid = null; // 正在内联编辑的浮动节点UID
 let _ctrlHeld = false; // 追踪 Ctrl 键是否按下，用于多选逻辑
 let wangEditorInstance = null; // 备注富文本编辑器实例
 let _activeGenUid = null; // 当前选中（单击）的摘要节点UID，用于控制+号显示
+// 富文本上次使用的文字/背景颜色：全局记忆，跨文档/节点共享，页面加载即从 localStorage 恢复
+let _lastUsedTextColor = (() => { try { return localStorage.getItem('wangeditor_last_text_color') || null; } catch (_) { return null; } })();
+let _lastUsedBgColor = (() => { try { return localStorage.getItem('wangeditor_last_bg_color') || null; } catch (_) { return null; } })();
 
 // 过滤HTML标签工具函数
 function stripHtml(html) {
@@ -39,7 +42,7 @@ function sanitizeNoteHtml(html) {
         'THEAD', 'TR', 'U', 'UL'
     ]);
     const blockedTags = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META']);
-    const globalAttrs = new Set(['align', 'style', 'title']);
+    const globalAttrs = new Set(['align', 'class', 'style', 'title']);
     const tagAttrs = {
         A: new Set(['href', 'rel', 'target']),
         IMG: new Set(['alt', 'height', 'src', 'width']),
@@ -145,34 +148,76 @@ function sanitizeNoteHtml(html) {
     return template.innerHTML.trim();
 }
 
-let richNoteTooltipEl = null;
+let richNoteTooltipWrapperEl = null;  // 外层包裹（编辑按钮 + 内容区）
+let richNoteTooltipEl = null;        // 内容区（原有 div.rich-tooltip）
 let richNoteTooltipHideTimer = null;
 let isMouseInTooltip = false;
+// 当前悬浮层对应的节点来源，供编辑按钮点击时使用
+let _noteTooltipSource = null;  // { type: 'regular'|'float', node: obj, uid: string }
 
-// 获取共享备注悬浮层
+// 获取共享备注悬浮层包裹（含编辑按钮 + 内容区）
 function getRichNoteTooltipEl() {
-    if (richNoteTooltipEl) return richNoteTooltipEl;
+    if (richNoteTooltipWrapperEl) return richNoteTooltipWrapperEl;
+
+    // 外层包裹
+    richNoteTooltipWrapperEl = document.createElement('div');
+    richNoteTooltipWrapperEl.className = 'rich-tooltip-wrapper';
+    richNoteTooltipWrapperEl.setAttribute('aria-hidden', 'true');
+
+    // 编辑按钮
+    const editBtn = document.createElement('div');
+    editBtn.className = 'rich-tooltip-edit-btn';
+    editBtn.innerHTML = '✏️ 编辑';
+    editBtn.title = '点击修改备注';
+    editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!_noteTooltipSource) return;
+        const src = _noteTooltipSource;
+        // 点击后立即隐藏备注悬浮层，避免挡住弹出的编辑框
+        isMouseInTooltip = false;
+        hideRichNoteTooltip(0);
+        if (src.type === 'regular' && src.node) {
+            // 直接传 node 对象打开备注编辑器（不依赖 activeNodeCache）
+            if (src.node.getData) {
+                openNoteEditor(src.node);
+            } else if (src.uid && mindMap && mindMap.renderer) {
+                const found = mindMap.renderer.findNodeByUid(src.uid);
+                if (found) openNoteEditor(found);
+            }
+        } else if (src.type === 'float' && src.node) {
+            openFloatNoteEditor(src.node);
+        }
+    });
+
+    // 内容区
     richNoteTooltipEl = document.createElement('div');
     richNoteTooltipEl.className = 'rich-tooltip';
-    richNoteTooltipEl.setAttribute('aria-hidden', 'true');
-    
-    // 鼠标进入悬浮层时取消隐藏定时器，允许用户在悬浮层上滚动和操作
-    richNoteTooltipEl.addEventListener('mouseenter', () => {
+    richNoteTooltipWrapperEl.appendChild(richNoteTooltipEl);
+    // 编辑按钮在内容下方（左下角）
+    richNoteTooltipWrapperEl.appendChild(editBtn);
+
+    // 鼠标进入悬浮层时取消隐藏定时器
+    richNoteTooltipWrapperEl.addEventListener('mouseenter', () => {
         isMouseInTooltip = true;
         if (richNoteTooltipHideTimer) {
             clearTimeout(richNoteTooltipHideTimer);
             richNoteTooltipHideTimer = null;
         }
     });
-    
+
     // 鼠标离开悬浮层时立即隐藏
-    richNoteTooltipEl.addEventListener('mouseleave', () => {
+    richNoteTooltipWrapperEl.addEventListener('mouseleave', () => {
         isMouseInTooltip = false;
         hideRichNoteTooltip(0);
     });
 
-    document.body.appendChild(richNoteTooltipEl);
-    return richNoteTooltipEl;
+    document.body.appendChild(richNoteTooltipWrapperEl);
+    return richNoteTooltipWrapperEl;
+}
+
+// 设置当前备注悬浮层对应的节点来源（在 showRichNoteTooltip 前调用）
+function setNoteTooltipSource(type, node, uid) {
+    _noteTooltipSource = node ? { type, node, uid } : null;
 }
 
 // 判断清洗后的备注是否还有可展示内容
@@ -187,30 +232,39 @@ function hasVisibleNoteContent(html) {
 
 // 定位富文本备注悬浮层，避免贴到窗口边缘外
 function positionRichNoteTooltip(left, top, anchorRect) {
-    const tooltip = getRichNoteTooltipEl();
+    const wrapper = getRichNoteTooltipEl();
+    const tooltip = richNoteTooltipEl;
     const gap = 10;
     const margin = 8;
-    
-    // 限制 tooltip 最大高度，防止超过窗口
+
+    // 先让 wrapper 可见但透明，以便测量尺寸
+    wrapper.style.display = 'flex';
+    wrapper.style.visibility = 'hidden';
+    wrapper.style.left = '0';
+    wrapper.style.top = '0';
+
+    // 限制 tooltip 内容最大高度
     const maxHeight = Math.min(640, window.innerHeight - 2 * margin);
-    tooltip.style.maxHeight = maxHeight + 'px';
-    
-    const rect = tooltip.getBoundingClientRect();
+    const editBtnH = 32; // 编辑按钮 + 间距大约占 32px
+    tooltip.style.maxHeight = (maxHeight - editBtnH) + 'px';
+
+    const wrapperRect = wrapper.getBoundingClientRect();
     let x = anchorRect ? anchorRect.left : left;
     let y = anchorRect ? anchorRect.bottom + gap : top;
 
-    x = Math.min(Math.max(margin, x), Math.max(margin, window.innerWidth - rect.width - margin));
-    
-    // 如果向下展开会超出屏幕，并且如果向上展开不会超出屏幕（或者向上空间更大），则向上展开
-    if (y + rect.height > window.innerHeight - margin && anchorRect) {
-        y = anchorRect.top - rect.height - gap;
-    }
-    
-    // 最后确保不超出上下边界
-    y = Math.min(Math.max(margin, y), Math.max(margin, window.innerHeight - rect.height - margin));
+    x = Math.min(Math.max(margin, x), Math.max(margin, window.innerWidth - wrapperRect.width - margin));
 
-    tooltip.style.left = x + 'px';
-    tooltip.style.top = y + 'px';
+    // 如果向下展开会超出屏幕，则向上展开
+    if (y + wrapperRect.height > window.innerHeight - margin && anchorRect) {
+        y = anchorRect.top - wrapperRect.height - gap;
+    }
+
+    // 最后确保不超出上下边界
+    y = Math.min(Math.max(margin, y), Math.max(margin, window.innerHeight - wrapperRect.height - margin));
+
+    wrapper.style.visibility = 'visible';
+    wrapper.style.left = x + 'px';
+    wrapper.style.top = y + 'px';
 }
 
 // 显示共享富文本备注悬浮层
@@ -224,13 +278,13 @@ function showRichNoteTooltip(noteHtml, left, top, anchorRect) {
         hideRichNoteTooltip(0);
         return;
     }
-    const tooltip = getRichNoteTooltipEl();
+    const wrapper = getRichNoteTooltipEl();
+    const tooltip = richNoteTooltipEl;
     tooltip.innerHTML = safeHtml;
-    
+
     // 动态调整宽度：如果图片宽度大于最长文本，则缩放图片到最长文本宽度
     tooltip.style.width = 'max-content';
-    tooltip.style.display = 'block';
-    
+
     const imgs = tooltip.querySelectorAll('img');
     if (imgs.length > 0) {
         // 先隐藏图片，测量纯文本的宽度
@@ -239,54 +293,52 @@ function showRichNoteTooltip(noteHtml, left, top, anchorRect) {
             originalDisplays.push(img.style.display);
             img.style.display = 'none';
         });
-        
+
         // 测量文本内容的宽度（包含padding）
         const textWidth = tooltip.getBoundingClientRect().width;
-        
+
         // 恢复图片显示
         imgs.forEach((img, i) => {
             img.style.display = originalDisplays[i];
-            img.style.cursor = 'pointer'; // 添加点击指针样式
-            // 绑定点击事件，弹出原图查看
+            img.style.cursor = 'pointer';
             img.onclick = (e) => {
                 e.stopPropagation();
                 showImagePreview(img.src);
             };
         });
-        
-        // 如果文本宽度大于基础padding（说明有文字），限制容器宽度为文本宽度
-        // 这样图片由于 css 的 max-width: 100% 就会自动缩小到文本宽度
-        // 如果没有文字（宽度等于padding，默认28px左右），则不限制宽度，让图片按自身宽度显示
+
         if (textWidth > 40) {
             tooltip.style.width = textWidth + 'px';
         }
     }
-    
-    tooltip.setAttribute('aria-hidden', 'false');
+
+    wrapper.setAttribute('aria-hidden', 'false');
     positionRichNoteTooltip(left, top, anchorRect);
 }
 
 // 隐藏共享富文本备注悬浮层
 function hideRichNoteTooltip(delay) {
-    if (isMouseInTooltip) return; // 如果鼠标在悬浮层内，忽略外部触发的隐藏请求
+    if (isMouseInTooltip) return;
 
-    const hideDelay = typeof delay === 'number' ? delay : 300; // 默认300ms延迟，方便鼠标移动到悬浮层上
-    
+    const hideDelay = typeof delay === 'number' ? delay : 300;
+
     if (richNoteTooltipHideTimer) {
         clearTimeout(richNoteTooltipHideTimer);
     }
-    
+
     if (hideDelay > 0) {
         richNoteTooltipHideTimer = setTimeout(() => {
-            const tooltip = getRichNoteTooltipEl();
-            tooltip.style.display = 'none';
-            tooltip.setAttribute('aria-hidden', 'true');
+            const wrapper = getRichNoteTooltipEl();
+            wrapper.style.display = 'none';
+            wrapper.setAttribute('aria-hidden', 'true');
+            _noteTooltipSource = null;
             richNoteTooltipHideTimer = null;
         }, hideDelay);
     } else {
-        const tooltip = getRichNoteTooltipEl();
-        tooltip.style.display = 'none';
-        tooltip.setAttribute('aria-hidden', 'true');
+        const wrapper = getRichNoteTooltipEl();
+        wrapper.style.display = 'none';
+        wrapper.setAttribute('aria-hidden', 'true');
+        _noteTooltipSource = null;
         richNoteTooltipHideTimer = null;
     }
 }
@@ -736,6 +788,7 @@ function renderFloatingNodes() {
             const noteIcon = e.target.closest && e.target.closest('.floating-node-note-icon');
             if (!noteIcon) return;
             const noteHtml = noteIcon.getAttribute('data-note-html');
+            setNoteTooltipSource('float', fn, fn.data.uid);
             showRichNoteTooltip(noteHtml, e.clientX + 12, e.clientY + 12);
         });
 
@@ -1795,10 +1848,12 @@ function openFloatNoteEditor(fn) {
 
     const note = fn.data.note || '';
     if (wangEditorInstance) {
-        wangEditorInstance.setHtml(note);
+        const cleanHtml = dedupeNestedNoteHtml(note);
+        wangEditorInstance.setHtml(cleanHtml);
         setTimeout(() => {
+            flattenNoteEditorIfNeeded();
             initialNoteContentForCompare = wangEditorInstance.getHtml();
-        }, 100);
+        }, 120);
     }
     document.getElementById('modal-note-save').onclick = () => {
         if (window.isAIGenerating) {
@@ -1814,7 +1869,9 @@ function openFloatNoteEditor(fn) {
         
         let noteHtml = '';
         if (wangEditorInstance) {
-            noteHtml = wangEditorInstance.getHtml();
+            // 保存前清洗，不把嵌套脏数据写回
+            flattenNoteEditorIfNeeded();
+            noteHtml = dedupeNestedNoteHtml(wangEditorInstance.getHtml());
         }
         const finalNote = hasVisibleNoteContent(noteHtml) ? noteHtml : null;
         
@@ -2143,6 +2200,8 @@ function initMindMap(data) {
                 const anchorRect = node && node._noteData && node._noteData.node && node._noteData.node.node
                     ? node._noteData.node.node.getBoundingClientRect()
                     : null;
+                const uid = node && node.getData ? node.getData('uid') : null;
+                setNoteTooltipSource('regular', node, uid);
                 showRichNoteTooltip(note, left, top, anchorRect);
             },
             hide: hideRichNoteTooltip,
@@ -2940,6 +2999,14 @@ function renderTreeNode(node, depth) {
     nameEl.textContent = isFolder ? node.name : (stripHtml(node.title) || node.id);
     wrapper.appendChild(nameEl);
 
+    // 文件夹支持双击名称重命名
+    if (isFolder) {
+        nameEl.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            startRenameFolder(wrapper, nameEl, itemId, node.name);
+        });
+    }
+
     // --- 删除按钮 ---
     const delBtn = document.createElement('button');
     delBtn.className = 'file-tree-delete';
@@ -3089,6 +3156,99 @@ function toggleFolder(folderId) {
     } else {
         toggle.classList.add('collapsed');
         children.style.display = 'none';
+    }
+}
+
+/**
+ * 进入文件夹重命名编辑态
+ * @param {HTMLElement} wrapper 当前文件树条目
+ * @param {HTMLElement} nameEl 名称节点（编辑期间被 input 替换）
+ * @param {string} folderId 文件夹 ID
+ * @param {string} oldName 原文件夹名称
+ */
+function startRenameFolder(wrapper, nameEl, folderId, oldName) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'file-tree-name-input';
+    input.value = oldName || '';
+    input.maxLength = 50;
+
+    wrapper.replaceChild(input, nameEl);
+    input.focus();
+    input.select();
+
+    let finished = false;
+
+    function restore() {
+        wrapper.replaceChild(nameEl, input);
+    }
+
+    async function commit() {
+        if (finished) return;
+        finished = true;
+        const newName = input.value.trim();
+        if (!newName) {
+            restore();
+            showToast('文件夹名称不能为空');
+            return;
+        }
+        if (newName === oldName) {
+            restore();
+            return;
+        }
+        const ok = await saveRenameFolder(folderId, newName);
+        if (!ok) {
+            restore();
+            return;
+        }
+        restore();
+    }
+
+    function cancel() {
+        if (finished) return;
+        finished = true;
+        restore();
+    }
+
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancel();
+        }
+    });
+}
+
+/**
+ * 调用后端接口保存文件夹新名称
+ * @param {string} folderId 文件夹 ID
+ * @param {string} newName 新名称
+ * @returns {Promise<boolean>} 是否保存成功
+ */
+async function saveRenameFolder(folderId, newName) {
+    try {
+        const res = await fetch(`/api/folders/${folderId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName }),
+        });
+        if (!res.ok) {
+            let detail = 'HTTP ' + res.status;
+            try { const e = await res.json(); detail = e.detail || detail; } catch (_) {}
+            showToast(detail);
+            return false;
+        }
+        loadFileList();
+        return true;
+    } catch (err) {
+        console.error('重命名文件夹失败:', err);
+        showToast('重命名文件夹失败');
+        return false;
     }
 }
 
@@ -3800,10 +3960,88 @@ function setupTagEditor(node) {
 // ============ Note Editor ============
 let isNoteEditorInitialized = false;
 
-// --- 注册自定义富文本代码块 ---
+// 清洗备注内容 HTML：去除多层嵌套的 .rich-code-block 和 .w-e-quote-block（通常来自旧版本脏数据）
+function dedupeNestedNoteHtml(html) {
+    if (!html) return html;
+    try {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const body = doc.body;
+        // 重复展开多层嵌套直到没有自嵌套
+        const BLOCK_SELECTORS = [
+            'div.rich-code-block',
+            'blockquote.w-e-quote-block',
+            'blockquote'
+        ];
+        let changed = true;
+        let safetyCounter = 0;
+        while (changed && safetyCounter < 10) {
+            changed = false;
+            safetyCounter++;
+            for (const sel of BLOCK_SELECTORS) {
+                const els = body.querySelectorAll(sel);
+                for (const el of els) {
+                    // 如果父节点也是同类，则把 children 提出来替换父中的自己
+                    let parent = el.parentElement;
+                    while (parent && parent !== body) {
+                        const isParentMatch = (
+                            parent.matches &&
+                            BLOCK_SELECTORS.some(s => { try { return parent.matches(s); } catch (_) { return false; } })
+                        );
+                        if (!isParentMatch) break;
+                        // 将父节点的所有 children 平铺
+                        const frag = document.createDocumentFragment();
+                        while (el.firstChild) frag.appendChild(el.firstChild);
+                        if (el.parentNode) el.parentNode.replaceChild(frag, el);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        return body.innerHTML;
+    } catch (_) {
+        return html;
+    }
+}
+
+// 编辑器 setHtml 之后，再对 Slate 模型做一次最终的解嵌套，防止 parseHtml 阶段漏网之鱼
+function flattenNoteEditorIfNeeded() {
+    if (!wangEditorInstance || !window.wangEditor) return;
+    try {
+        const { SlateTransforms: ST, SlateEditor: SE, SlateNode: SN } = window.wangEditor;
+        const editor = wangEditorInstance;
+        const selfTypes = ['rich-code', 'quote-block'];
+        // 先解包所有自嵌套的 rich-code 和 quote-block
+        for (const t of selfTypes) {
+            let safety = 0;
+            while (safety++ < 10) {
+                const entries = [];
+                const iter = SE.nodes(editor, {
+                    at: [],
+                    match: (n, p) => n && typeof n === 'object' && n.type === t
+                });
+                let r;
+                while ((r = iter.next()) && !r.done) entries.push(r.value);
+                let foundNested = false;
+                for (const [n, path] of entries) {
+                    if (path && path.length > 1) {
+                        const parent = SN.get(editor, path.slice(0, -1));
+                        if (parent && typeof parent === 'object' && selfTypes.includes(parent.type)) {
+                            try { ST.unwrapNodes(editor, { at: path, match: n => n.type === t }); foundNested = true; } catch (_) {}
+                        }
+                    }
+                }
+                if (!foundNested) break;
+            }
+        }
+    } catch (_) {}
+}
+
+// --- 注册自定义富文本代码块 + 引用块 ---
 if (window.wangEditor && window.wangEditor.Boot) {
     const { Boot } = window.wangEditor;
 
+    // ========== 浅色代码块 ==========
     const renderRichCode = (elem, children, editor) => {
         return {
             sel: 'div',
@@ -3819,9 +4057,22 @@ if (window.wangEditor && window.wangEditor.Boot) {
     };
 
     const parseHtmlRichCode = (domElem, children, editor) => {
+        // 清洗掉多层嵌套：如果子 children 里已经有同类 rich-code，则只保留最内层的 children
+        // 避免脏数据导致的多层 rich-code 无限嵌套
+        const unwrapped = [];
+        const _flatten = (list) => {
+            for (const c of list || []) {
+                if (c && typeof c === 'object' && c.type === 'rich-code') {
+                    _flatten(c.children || []);
+                } else {
+                    unwrapped.push(c);
+                }
+            }
+        };
+        _flatten(children);
         return {
             type: 'rich-code',
-            children: children
+            children: unwrapped.length > 0 ? unwrapped : [{ text: '' }]
         };
     };
 
@@ -3840,25 +4091,270 @@ if (window.wangEditor && window.wangEditor.Boot) {
         isDisabled(editor) { return false; }
         exec(editor, value) {
             const { SlateTransforms, SlateEditor } = window.wangEditor;
-            const isActive = this.isActive(editor);
-            if (isActive) {
-                SlateTransforms.unwrapNodes(editor, { match: n => n.type === 'rich-code' });
-            } else {
-                SlateTransforms.wrapNodes(editor, { type: 'rich-code', children: [] }, { match: n => SlateEditor.isBlock(editor, n) });
+            // 点击工具栏按钮时 wangEditor 已自动恢复选区，直接判断光标是否在容器内
+            const activeMatch = SlateEditor.above(editor, { match: n => n && n.type === 'rich-code' });
+            if (activeMatch) {
+                const [container, containerPath] = activeMatch;
+                // 手动解包：删除容器节点，将子节点原位置插入（避免 unwrapNodes 在根节点的边界问题）
+                const children = [...(container.children || [])];
+                if (children.length > 0) {
+                    SlateTransforms.removeNodes(editor, { at: containerPath });
+                    SlateTransforms.insertNodes(editor, children, { at: containerPath });
+                    // 光标定位到解包后第一个子节点末尾
+                    try {
+                        const firstChildPath = [...containerPath];
+                        if (firstChildPath.length > 0) firstChildPath[firstChildPath.length - 1] += children.length - 1;
+                        const endPoint = SlateEditor.end(editor, firstChildPath);
+                        SlateTransforms.select(editor, { anchor: endPoint, focus: endPoint });
+                    } catch (_) {}
+                }
+                try { editor.onChange(); } catch (_) {}
+                return;
+            }
+            // Wrap：只包裹光标所在的当前块
+            const blockMatch = SlateEditor.above(editor, { match: n => SlateEditor.isBlock(editor, n) });
+            if (blockMatch) {
+                const alreadySpecial = SlateEditor.above(editor, {
+                    match: n => n && ['rich-code', 'quote-block', 'pre', 'code-block'].includes(n.type)
+                });
+                if (alreadySpecial) return;
+                SlateTransforms.wrapNodes(editor, { type: 'rich-code', children: [] }, { at: blockMatch[1] });
+                try { editor.onChange(); } catch (_) {}
+            }
+        }
+    }
+
+    // ========== 引用块 ==========
+    const renderQuote = (elem, children, editor) => {
+        return {
+            sel: 'blockquote',
+            data: {
+                className: 'w-e-quote-block'
+            },
+            children: children
+        };
+    };
+
+    const quoteToHtml = (elem, childrenHtml) => {
+        return `<blockquote class="w-e-quote-block">${childrenHtml}</blockquote>`;
+    };
+
+    const parseHtmlQuote = (domElem, children, editor) => {
+        // 清洗掉多层嵌套：剥除内部重复的 quote-block / rich-code 自身包裹
+        const unwrapped = [];
+        const _flatten = (list) => {
+            for (const c of list || []) {
+                if (c && typeof c === 'object' && (c.type === 'quote-block' || c.type === 'rich-code')) {
+                    _flatten(c.children || []);
+                } else {
+                    unwrapped.push(c);
+                }
+            }
+        };
+        _flatten(children);
+        return {
+            type: 'quote-block',
+            children: unwrapped.length > 0 ? unwrapped : [{ text: '' }]
+        };
+    };
+
+    class QuoteMenu {
+        constructor() {
+            this.title = '引用';
+            this.iconSvg = '<svg viewBox="0 0 1024 1024"><path d="M469.333333 128v298.666667h-149.333333c0-82.56 66.773333-149.333333 149.333333-149.333334V128z m0 213.333334V640H256c0-82.56 66.773333-149.333333 149.333333-149.333333v-149.333333h64zM896 128v298.666667h-149.333333c0-82.56 66.773333-149.333333 149.333333-149.333334V128z m0 213.333334V640H682.666667c0-82.56 66.773333-149.333333 149.333333-149.333333v-149.333333h64z" fill="currentColor"></path></svg>';
+            this.tag = 'button';
+        }
+        getValue(editor) { return ''; }
+        isActive(editor) {
+            const { SlateEditor } = window.wangEditor;
+            const match = SlateEditor.above(editor, { match: n => n.type === 'quote-block' });
+            return !!match;
+        }
+        isDisabled(editor) { return false; }
+        exec(editor, value) {
+            const { SlateTransforms, SlateEditor } = window.wangEditor;
+            const activeMatch = SlateEditor.above(editor, { match: n => n && n.type === 'quote-block' });
+            if (activeMatch) {
+                const [container, containerPath] = activeMatch;
+                const children = [...(container.children || [])];
+                if (children.length > 0) {
+                    SlateTransforms.removeNodes(editor, { at: containerPath });
+                    SlateTransforms.insertNodes(editor, children, { at: containerPath });
+                    try {
+                        const firstChildPath = [...containerPath];
+                        if (firstChildPath.length > 0) firstChildPath[firstChildPath.length - 1] += children.length - 1;
+                        const endPoint = SlateEditor.end(editor, firstChildPath);
+                        SlateTransforms.select(editor, { anchor: endPoint, focus: endPoint });
+                    } catch (_) {}
+                }
+                try { editor.onChange(); } catch (_) {}
+                return;
+            }
+            const blockMatch = SlateEditor.above(editor, { match: n => SlateEditor.isBlock(editor, n) });
+            if (blockMatch) {
+                const alreadySpecial = SlateEditor.above(editor, {
+                    match: n => n && ['rich-code', 'quote-block', 'pre', 'code-block'].includes(n.type)
+                });
+                if (alreadySpecial) return;
+                SlateTransforms.wrapNodes(editor, { type: 'quote-block', children: [] }, { at: blockMatch[1] });
+                try { editor.onChange(); } catch (_) {}
             }
         }
     }
 
     try {
         Boot.registerModule({
-            renderElems: [{ type: 'rich-code', renderElem: renderRichCode }],
-            elemsToHtml: [{ type: 'rich-code', elemToHtml: richCodeToHtml }],
-            parseElemsHtml: [{ selector: 'div.rich-code-block', parseElemHtml: parseHtmlRichCode }],
-            menus: [{ key: 'richCode', factory() { return new RichCodeMenu(); } }]
+            renderElems: [
+                { type: 'rich-code', renderElem: renderRichCode },
+                { type: 'quote-block', renderElem: renderQuote }
+            ],
+            elemsToHtml: [
+                { type: 'rich-code', elemToHtml: richCodeToHtml },
+                { type: 'quote-block', elemToHtml: quoteToHtml }
+            ],
+            parseElemsHtml: [
+                { selector: 'div.rich-code-block', parseElemHtml: parseHtmlRichCode },
+                { selector: 'blockquote.w-e-quote-block, blockquote', parseElemHtml: parseHtmlQuote }
+            ],
+            menus: [
+                { key: 'richCode', factory() { return new RichCodeMenu(); } },
+                { key: 'quoteBlock', factory() { return new QuoteMenu(); } }
+            ]
         });
     } catch (e) {
-        console.warn('richCode module already registered');
+        console.warn('richCode/quote module already registered', e.message);
     }
+}
+
+// ========== 颜色/背景色按钮的颜色指示 ==========
+
+// 确保文字颜色按钮的下划线已从原 SVG 中拆分为独立 path（用于单独着色显示上次颜色）
+function ensureTextColorUnderline() {
+    try {
+        const btn = document.querySelector('[data-menu-key="color"]');
+        if (!btn) return null;
+        let underline = btn.querySelector('svg path.text-color-indicator');
+        if (underline) return underline;
+
+        const mainSvg = btn.querySelector('svg');
+        const originalPath = mainSvg && mainSvg.querySelector('path');
+        if (!mainSvg || !originalPath) return null;
+
+        const d = originalPath.getAttribute('d') || '';
+        const firstZ = d.indexOf('z');
+        if (firstZ === -1) return null;
+
+        // 原 path 第一段子路径即底部下划线，拆出后 A 字母保留在原 path
+        const underlineD = d.slice(0, firstZ + 1);
+        const aLetterD = d.slice(firstZ + 1);
+        originalPath.setAttribute('d', aLetterD);
+
+        underline = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        underline.setAttribute('d', underlineD);
+        underline.classList.add('text-color-indicator');
+        mainSvg.appendChild(underline);
+        return underline;
+    } catch (_) {
+        return null;
+    }
+}
+
+// 更新文字颜色按钮下划线颜色（无颜色时恢复默认）
+function updateTextColorIndicator() {
+    const underline = ensureTextColorUnderline();
+    if (!underline) return;
+    if (_lastUsedTextColor) {
+        underline.setAttribute('fill', _lastUsedTextColor);
+    } else {
+        underline.removeAttribute('fill');
+    }
+}
+
+// 确保背景色按钮底部存在颜色指示条
+function ensureBgColorIndicator() {
+    try {
+        const btn = document.querySelector('[data-menu-key="bgColor"]');
+        if (!btn) return null;
+        let indicator = btn.querySelector('.bg-color-indicator');
+        if (indicator) return indicator;
+
+        indicator = document.createElement('span');
+        indicator.className = 'bg-color-indicator';
+        indicator.style.cssText = `
+            position: absolute; bottom: 2px; left: 18%; width: 64%; height: 3px;
+            border-radius: 1px; pointer-events: none; z-index: 3;
+        `;
+        btn.appendChild(indicator);
+        return indicator;
+    } catch (_) {
+        return null;
+    }
+}
+
+// 更新背景色按钮指示条颜色（无颜色时隐藏）
+function updateBgColorIndicator() {
+    const indicator = ensureBgColorIndicator();
+    if (!indicator) return;
+    if (_lastUsedBgColor) {
+        indicator.style.display = 'block';
+        indicator.style.backgroundColor = _lastUsedBgColor;
+    } else {
+        indicator.style.display = 'none';
+        indicator.style.backgroundColor = '';
+    }
+}
+
+// 统一刷新颜色/背景色指示
+function refreshColorIndicators() {
+    updateTextColorIndicator();
+    updateBgColorIndicator();
+}
+
+// 记录文字颜色记忆并刷新下划线指示（value 为 '0' 或空表示清除）
+function rememberTextColor(value) {
+    if (value && value !== '0') {
+        _lastUsedTextColor = value;
+        try { localStorage.setItem('wangeditor_last_text_color', value); } catch (_) {}
+    } else {
+        _lastUsedTextColor = null;
+        try { localStorage.removeItem('wangeditor_last_text_color'); } catch (_) {}
+    }
+    updateTextColorIndicator();
+}
+
+// 记录背景色记忆并刷新指示条
+function rememberBgColor(value) {
+    if (value && value !== '0') {
+        _lastUsedBgColor = value;
+        try { localStorage.setItem('wangeditor_last_bg_color', value); } catch (_) {}
+    } else {
+        _lastUsedBgColor = null;
+        try { localStorage.removeItem('wangeditor_last_bg_color'); } catch (_) {}
+    }
+    updateBgColorIndicator();
+}
+
+// 监听颜色面板点击，记录用户主动选择的颜色。
+// 注意：当前 wangEditor 版本的颜色面板点击只执行 addMark/removeMark，并不调用 MENU_CONF 的 onClick。
+function bindColorPanelClickTracking() {
+    if (window.__colorPanelTrackingBound) return;
+    window.__colorPanelTrackingBound = true;
+    document.addEventListener('click', (e) => {
+        const li = e.target && e.target.closest ? e.target.closest('li[data-value]') : null;
+        if (!li) return;
+        const ul = li.parentElement;
+        if (!ul || !ul.classList.contains('w-e-panel-content-color')) return;
+        const value = li.getAttribute('data-value');
+        // 文字颜色与背景色面板的 ul 类名相同，需通过最近的菜单按钮 data-menu-key 区分
+        const barItem = ul.closest('.w-e-bar-item');
+        const menuBtn = barItem ? barItem.querySelector('[data-menu-key]') : null;
+        const menuKey = menuBtn ? menuBtn.getAttribute('data-menu-key') : null;
+        if (menuKey === 'color') {
+            rememberTextColor(value);
+        } else if (menuKey === 'bgColor') {
+            rememberBgColor(value);
+        }
+    });
 }
 
 function initNoteEditorIfNeeded() {
@@ -3870,7 +4366,8 @@ function initNoteEditorIfNeeded() {
     }
 
     try {
-        const { createEditor, createToolbar } = window.wangEditor;
+        const { createEditor, createToolbar, SlateEditor, SlateTransforms, SlateLocation } = window.wangEditor;
+        
         const editorConfig = {
         placeholder: '输入备注内容...',
         hoverbarKeys: {
@@ -3881,10 +4378,28 @@ function initNoteEditorIfNeeded() {
         MENU_CONF: {
             uploadImage: {
                 base64LimitSize: 10 * 1024 * 1024 // 10MB, convert to base64
+            },
+            // 颜色选择后记录
+            color: {
+                colors: [
+                    '#000000', '#eeece0', '#1c487f', '#4d80bf',
+                    '#c24f4a', '#8baa4a', '#7b5ba1', '#46acc8',
+                    '#f9963b', '#ffffff',
+                    '#5B7AFF', '#FF6B6B', '#4ECDC4', '#FFD93D',
+                    '#95E1D3', '#F38181', '#AA96DA', '#FCBAD3',
+                    '#A8D8EA', '#FFE66D'
+                ]
+            },
+            bgColor: {
+                colors: [
+                    '#ffffff', '#eeece0', '#1c487f', '#4d80bf',
+                    '#c24f4a', '#8baa4a', '#7b5ba1', '#46acc8',
+                    '#f9963b', '#000000',
+                    '#EEF1FF', '#FFE5E5', '#E5F8F5', '#FFF8DC',
+                    '#F0FBF7', '#FFE9EA', '#F5F0FF', '#FFEEF6',
+                    '#EDF7FC', '#FFFDE0'
+                ]
             }
-        },
-        onChange(editor) {
-            // console.log('editor content', editor.getHtml());
         }
     };
     wangEditorInstance = createEditor({
@@ -3893,55 +4408,305 @@ function initNoteEditorIfNeeded() {
         config: editorConfig,
         mode: 'default'
     });
+
+    // 监听颜色面板点击，记录用户主动选择的颜色（用于“上次颜色”记忆与指示）
+    bindColorPanelClickTracking();
+
+    // ========== 增强工具栏：拦截文字颜色按钮单击，直接应用上次颜色 ==========
+    function enhanceToolbarButtons() {
+        const toolbarEl = document.getElementById('editor-toolbar');
+        if (!toolbarEl) return;
+
+        // 颜色按钮点击 - 点击图标直接应用上次颜色
+        const colorBtnWrapper = toolbarEl.querySelector('[data-menu-key="color"]');
+        if (colorBtnWrapper && !colorBtnWrapper.dataset._enhanced) {
+            colorBtnWrapper.dataset._enhanced = '1';
+            // wangEditor 工具栏中 [data-menu-key="color"] 本身就是 <button> 元素，直接作为触发按钮
+            const triggerBtn = colorBtnWrapper;
+            if (triggerBtn) {
+                // 插入一个覆盖图标区（非下拉箭头部分）的遮罩元素，用于拦截左键点击直接应用上次颜色
+                const overlay = document.createElement('span');
+                overlay.style.cssText = `
+                    position: absolute; left: 0; top: 0; 
+                    width: calc(100% - 14px); height: 100%;
+                    z-index: 2; cursor: pointer;
+                `;
+                overlay.title = '应用上次颜色（点击右侧箭头选择颜色）';
+                overlay.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (_lastUsedTextColor && wangEditorInstance) {
+                        try {
+                            wangEditorInstance.focus();
+                            // 使用 addMark 直接给当前选区文字上色（本版本无 DomEditor.getMenu / handleCommand）
+                            wangEditorInstance.addMark('color', _lastUsedTextColor);
+                        } catch (err) {
+                            console.warn('apply text color failed:', err);
+                        }
+                    } else {
+                        // 如果没有记录颜色，触发原按钮显示下拉
+                        if (triggerBtn) triggerBtn.click();
+                    }
+                });
+                // 阻止 click 冒泡到按钮，避免应用颜色后又触发下拉面板展开
+                overlay.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                });
+                if (getComputedStyle(colorBtnWrapper).position === 'static') {
+                    colorBtnWrapper.style.position = 'relative';
+                }
+                colorBtnWrapper.appendChild(overlay);
+            }
+        }
+
+        // 背景色按钮
+        const bgBtnWrapper = toolbarEl.querySelector('[data-menu-key="bgColor"]');
+        if (bgBtnWrapper && !bgBtnWrapper.dataset._enhanced) {
+            bgBtnWrapper.dataset._enhanced = '1';
+            // wangEditor 工具栏中 [data-menu-key="bgColor"] 本身就是 <button> 元素，直接作为触发按钮
+            const triggerBtn = bgBtnWrapper;
+            if (triggerBtn) {
+                const overlay = document.createElement('span');
+                overlay.style.cssText = `
+                    position: absolute; left: 0; top: 0; 
+                    width: calc(100% - 14px); height: 100%;
+                    z-index: 2; cursor: pointer;
+                `;
+                overlay.title = '应用上次背景色（点击右侧箭头选择颜色）';
+                overlay.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (_lastUsedBgColor && wangEditorInstance) {
+                        try {
+                            wangEditorInstance.focus();
+                            // 使用 addMark 直接给当前选区上背景色（wangEditor 使用 bgColor 作为 mark key）
+                            wangEditorInstance.addMark('bgColor', _lastUsedBgColor);
+                        } catch (err) {
+                            console.warn('apply bg color failed:', err);
+                        }
+                    } else {
+                        if (triggerBtn) triggerBtn.click();
+                    }
+                });
+                // 阻止 click 冒泡到按钮，避免应用背景色后又触发下拉面板展开
+                overlay.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                });
+                if (getComputedStyle(bgBtnWrapper).position === 'static') {
+                    bgBtnWrapper.style.position = 'relative';
+                }
+                bgBtnWrapper.appendChild(overlay);
+            }
+        }
+
+        // 监听“清除样式”按钮：擦除格式时仅清除当前选区/光标的实际颜色（光标颜色回到默认色），
+        // 但保留“上次颜色”记忆（默认色不被擦除），避免用户记忆的颜色被清空。
+        const clearBtn = toolbarEl.querySelector('[data-menu-key="clearStyle"]');
+        if (clearBtn && !clearBtn.dataset._colorResetBound) {
+            clearBtn.dataset._colorResetBound = '1';
+            clearBtn.addEventListener('click', () => {
+                if (wangEditorInstance) {
+                    try {
+                        // 显式移除文字颜色与背景色 mark，确保光标/后续输入恢复默认色
+                        wangEditorInstance.removeMark('color');
+                        wangEditorInstance.removeMark('bgColor');
+                    } catch (err) {
+                        console.warn('clear color mark failed:', err);
+                    }
+                }
+            });
+        }
+
+        // 初始化颜色指示（文字颜色下划线 / 背景色指示条）
+        refreshColorIndicators();
+    }
+    // 延迟增强，因为工具栏需要一点时间渲染
+    setTimeout(enhanceToolbarButtons, 300);
+    setTimeout(enhanceToolbarButtons, 1000);
     
-    // 支持Tab键缩进和回车键清除缩进
+    // 支持Tab键缩进、回车键逻辑、方向键跳出代码块
     document.getElementById('editor-container').addEventListener('keydown', (e) => {
+        if (!wangEditorInstance) return;
+        const W = window.wangEditor;
+        if (!W) return;
+        const { SlateEditor: SE, SlateTransforms: ST, SlatePath: SP } = W;
+
         if (e.key === 'Tab') {
             e.preventDefault();
             const menuKey = e.shiftKey ? 'delIndent' : 'indent';
-            
-            // wangEditor V5 触发菜单命令的推荐方式，或者通过模拟点击工具栏按钮
             const toolbarEl = document.getElementById('editor-toolbar');
             if (toolbarEl) {
-                // 查找菜单项 DOM，wangEditor V5 的菜单按钮可能包含内部的 <button>
                 const item = toolbarEl.querySelector(`[data-menu-key="${menuKey}"]`);
                 if (item) {
                     const btn = item.querySelector('button') || item;
-                    // 先恢复编辑器焦点
-                    if (wangEditorInstance) {
-                        wangEditorInstance.focus();
-                    }
+                    wangEditorInstance.focus();
                     btn.click();
                     return;
                 }
             }
-            
-            // fallback: 尝试通过内部 editor api 触发
-            if (wangEditorInstance && typeof wangEditorInstance.handleCommand === 'function') {
+            if (typeof wangEditorInstance.handleCommand === 'function') {
                 wangEditorInstance.handleCommand(menuKey);
             }
-        } else if (e.key === 'Enter' && !e.shiftKey) {
-            // 阻止默认行为，手动执行换行，以确保同步获取到新生成的块
-            e.preventDefault();
-            if (wangEditorInstance) {
-                wangEditorInstance.insertBreak();
+            return;
+        }
 
-                if (window.wangEditor && window.wangEditor.SlateTransforms && window.wangEditor.SlateEditor) {
-                    const { SlateTransforms, SlateEditor } = window.wangEditor;
-                    const match = SlateEditor.above(wangEditorInstance, {
-                        match: n => SlateEditor.isBlock(wangEditorInstance, n)
-                    });
-                    if (match) {
-                        const [block, path] = match;
-                        // 仅在段落中移除所有不必要的样式属性，确保完全靠左对齐
-                        if (block && block.type === 'paragraph') {
-                            const propsToRemove = Object.keys(block).filter(key => key !== 'type' && key !== 'children');
-                            if (propsToRemove.length > 0) {
-                                SlateTransforms.unsetNodes(wangEditorInstance, propsToRemove, { at: path });
+        // ========== Backspace：在代码块/引用块开头时解包，恢复为普通段落 ==========
+        if (e.key === 'Backspace' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) {
+            try {
+                const editor = wangEditorInstance;
+                const specialTypes = ['rich-code', 'quote-block', 'pre', 'code-block'];
+                const containerMatch = SE.above(editor, {
+                    match: n => typeof n === 'object' && n !== null && specialTypes.includes(n.type)
+                });
+                if (containerMatch) {
+                    const [containerNode, containerPath] = containerMatch;
+                    const isAtStart = SE.isStart(editor, editor.selection.anchor, containerPath);
+                    if (isAtStart) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        // 解包特殊块外壳（移除容器节点，内部内容提升）
+                        ST.unwrapNodes(editor, {
+                            match: n => typeof n === 'object' && n !== null && specialTypes.includes(n.type)
+                        });
+                        // 原生代码块解包后会留下顶级 code 节点，转为普通段落并清理 language 属性
+                        if (containerNode.type === 'pre' || containerNode.type === 'code-block') {
+                            try {
+                                const codeMatch = SE.above(editor, { match: n => n && n.type === 'code' });
+                                if (codeMatch) {
+                                    ST.setNodes(editor, { type: 'paragraph' }, { at: codeMatch[1] });
+                                    ST.unsetNodes(editor, ['language'], { at: codeMatch[1] });
+                                }
+                            } catch (_) {}
+                        }
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.warn('backspace handler error:', err);
+            }
+        }
+
+        // ========== 方向键右键：在块级容器最末尾时跳出 ==========
+        if (e.key === 'ArrowRight' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            try {
+                // 查找包含当前选区的最外层特殊块容器
+                const specialTypes = ['rich-code', 'quote-block', 'pre', 'code-block'];
+                const containerMatch = SE.above(wangEditorInstance, {
+                    match: n => typeof n === 'object' && n !== null && specialTypes.includes(n.type)
+                });
+                if (containerMatch) {
+                    const [containerNode, containerPath] = containerMatch;
+                    const editor = wangEditorInstance;
+                    const isAtEnd = SE.isEnd(editor, editor.selection.anchor, containerPath);
+                    if (isAtEnd) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        // 在容器后面插入一个空段落
+                        const afterPath = SP.next(containerPath);
+                        try {
+                            const hasAfter = SE.hasPath(editor, afterPath);
+                            if (!hasAfter) {
+                                ST.insertNodes(editor, { type: 'paragraph', children: [{ text: '' }] }, { at: afterPath });
                             }
+                            ST.select(editor, {
+                                anchor: { path: afterPath.concat([0]), offset: 0 },
+                                focus: { path: afterPath.concat([0]), offset: 0 }
+                            });
+                        } catch (err) {
+                            // fallback：直接移动选区到下一个兄弟节点或末尾
+                            try {
+                                ST.move(editor, { distance: 1, unit: 'line' });
+                            } catch (_) {}
+                        }
+                        return;
+                    }
+                }
+            } catch (err) {
+                // 忽略方向键处理错误
+            }
+        }
+
+        // ========== Alt+Enter：从代码块/引用块跳出到后面新段落 ==========
+        if (e.key === 'Enter' && e.altKey && !e.isComposing) {
+            try {
+                const editor = wangEditorInstance;
+                const specialTypes = ['rich-code', 'quote-block', 'pre', 'code-block'];
+                const containerMatch = SE.above(editor, {
+                    match: n => typeof n === 'object' && n !== null && specialTypes.includes(n.type)
+                });
+
+                if (containerMatch) {
+                    const [containerNode, containerPath] = containerMatch;
+                    const isAtEnd = SE.isEnd(editor, editor.selection.anchor, containerPath);
+
+                    if (isAtEnd) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const afterPath = SP.next(containerPath);
+                        try {
+                            const hasAfter = SE.hasPath(editor, afterPath);
+                            if (!hasAfter) {
+                                ST.insertNodes(editor, { type: 'paragraph', children: [{ text: '' }] }, { at: afterPath });
+                            }
+                            ST.select(editor, {
+                                anchor: { path: afterPath.concat([0]), offset: 0 },
+                                focus: { path: afterPath.concat([0]), offset: 0 }
+                            });
+                        } catch (err2) {
+                            console.warn('alt+enter break out of block error:', err2);
+                        }
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.warn('alt+enter handler error:', err);
+            }
+            return;
+        }
+
+        // ========== Enter键：正常换行（在代码块/引用块内也是换行，不跳出） ==========
+        if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
+            try {
+                const editor = wangEditorInstance;
+                const specialTypes = ['rich-code', 'quote-block', 'pre', 'code-block'];
+                const containerMatch = SE.above(editor, {
+                    match: n => typeof n === 'object' && n !== null && specialTypes.includes(n.type)
+                });
+
+                if (containerMatch) {
+                    // 在代码块/引用块内部：直接换行，不跳出
+                    e.preventDefault();
+                    editor.insertBreak();
+                    return;
+                }
+
+                // 普通段落内换行
+                e.preventDefault();
+                editor.insertBreak();
+                // 段落样式清理，但不要做任何滚动相关操作
+                const pMatch = SE.above(editor, {
+                    match: n => typeof n === 'object' && n !== null && n.type === 'paragraph'
+                });
+                if (pMatch) {
+                    const [block, path] = pMatch;
+                    if (block) {
+                        const propsToRemove = Object.keys(block).filter(key => key !== 'type' && key !== 'children');
+                        if (propsToRemove.length > 0) {
+                            ST.unsetNodes(editor, propsToRemove, { at: path });
                         }
                     }
                 }
+                return;
+            } catch (err) {
+                console.warn('enter key handler error:', err);
+            }
+
+            // Fallback: 走默认
+            e.preventDefault();
+            if (wangEditorInstance) {
+                wangEditorInstance.insertBreak();
             }
         }
     }, true); // 使用捕获阶段
@@ -3954,7 +4719,7 @@ function initNoteEditorIfNeeded() {
             'bulletedList', 'numberedList', '|',
             'justifyLeft', 'justifyCenter', 'justifyRight', '|',
             'indent', 'delIndent', '|',
-            'richCode', 'divider', 'codeBlock', '|',
+            'quoteBlock', 'richCode', 'divider', 'codeBlock', '|',
             'insertImage', 'uploadImage'
         ]
     };
@@ -3984,11 +4749,13 @@ function openNoteEditor(node) {
 
     const note = node.getData('note') || '';
     if (wangEditorInstance) {
-        wangEditorInstance.setHtml(note);
-        // 等待编辑器渲染完成后获取初始内容，用于后续判断是否修改
+        const cleanHtml = dedupeNestedNoteHtml(note);
+        wangEditorInstance.setHtml(cleanHtml);
+        // 再执行一次 Slate 模型层面解嵌套，彻底消掉 parseHtml 漏网的自嵌套
         setTimeout(() => {
+            flattenNoteEditorIfNeeded();
             initialNoteContentForCompare = wangEditorInstance.getHtml();
-        }, 100);
+        }, 120);
     }
 
     document.getElementById('modal-note-save').onclick = () => {
@@ -4005,7 +4772,9 @@ function openNoteEditor(node) {
 
         let noteHtml = '';
         if (wangEditorInstance) {
-            noteHtml = wangEditorInstance.getHtml();
+            // 保存前再做一次去嵌套清洗，绝不把脏数据写回
+            flattenNoteEditorIfNeeded();
+            noteHtml = dedupeNestedNoteHtml(wangEditorInstance.getHtml());
         }
         const finalNote = hasVisibleNoteContent(noteHtml) ? noteHtml : null;
         
@@ -4836,6 +5605,8 @@ function renderSummaryPlusButtons() {
                         const actualGenNode = matchedItem.generalizationNode;
                         const noteHtml = actualGenNode.getData('note');
                         if (noteHtml) {
+                            const uid = actualGenNode.getData('uid');
+                            setNoteTooltipSource('regular', actualGenNode, uid);
                             const rect = noteIcon.getBoundingClientRect();
                             showRichNoteTooltip(noteHtml, e.clientX + 12, e.clientY + 12, rect);
                         }

@@ -148,6 +148,9 @@ def api_delete_mindmap(uid: str):
 @router.get("/tree")
 def api_get_tree():
     tree = _read_tree()
+    if not isinstance(tree, list):
+        tree = []
+
     # 递归收集所有文件ID（包括嵌套文件夹内的）
     def _collect_ids(items):
         ids = set()
@@ -160,13 +163,73 @@ def api_get_tree():
                     ids |= _collect_ids(kids)
         return ids
     existing = _collect_ids(tree)
+
+    # 将磁盘上存在但树中任何位置都没有的文件追加到根（孤立文件同步）
     for f in _scan_files():
         if f["id"] not in existing:
-            tree.append({"type": "file", "id": f["id"], "title": f["title"]})
-    tree = [item for item in tree if not (
-        isinstance(item, dict) and item.get("type") == "file" and
-        not os.path.exists(os.path.join(DATA_DIR, f"{item.get('id', '')}.json"))
-    )]
+            tree.append({
+                "type": "file",
+                "id": f["id"],
+                "title": f["title"],
+                "updated_at": f.get("updated_at"),
+                "created_at": f.get("created_at"),
+            })
+
+    # 递归清理：磁盘上不存在的文件条目、以及格式损坏的条目
+    def _clean_items(items):
+        result = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            itype = item.get("type")
+            if itype == "file":
+                # 检查文件是否真的存在于磁盘上
+                fid = item.get("id", "")
+                fpath = os.path.join(DATA_DIR, f"{fid}.json")
+                if not os.path.exists(fpath):
+                    continue  # 跳过死文件条目
+                # 同步元数据
+                try:
+                    if os.path.exists(fpath):
+                        item["updated_at"] = datetime.fromtimestamp(
+                            os.path.getmtime(fpath)
+                        ).isoformat()
+                        item["created_at"] = datetime.fromtimestamp(
+                            os.path.getctime(fpath)
+                        ).isoformat()
+                        # 如果 title 为空，从文件读取
+                        if not item.get("title"):
+                            try:
+                                with open(fpath, "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                                root_text = re.sub(
+                                    r'<[^>]+>', '',
+                                    data.get("data", {}).get("text", "")
+                                ).strip() or fid
+                                item["title"] = root_text
+                            except Exception:
+                                item["title"] = fid
+                except Exception:
+                    pass
+                result.append(item)
+            elif itype == "folder":
+                kids = item.get("children")
+                if not isinstance(kids, list):
+                    kids = []
+                # 递归清理文件夹内的子项
+                item["children"] = _clean_items(kids)
+                # 确保 isOpen 字段存在（默认 True）
+                if "isOpen" not in item:
+                    item["isOpen"] = True
+                if "name" not in item or not item["name"]:
+                    item["name"] = item.get("id", "未命名文件夹")
+                result.append(item)
+            else:
+                # 未知类型，保留原样
+                result.append(item)
+        return result
+
+    tree = _clean_items(tree)
     _write_tree(tree)
     return {"tree": tree}
 
@@ -211,6 +274,33 @@ def _remove_folder(items, target_id):
             kids = item.get("children")
             if isinstance(kids, list):
                 ok, msg = _remove_folder(kids, target_id)
+                if ok:
+                    return True, msg
+    return False, "文件夹不存在"
+
+@router.put("/folders/{folder_id}")
+def api_rename_folder(folder_id: str, body: FolderBody):
+    tree = _read_tree()
+    ok, msg = _rename_folder(tree, folder_id, body.name)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    _write_tree(tree)
+    return {"success": True}
+
+def _rename_folder(items, target_id, new_name):
+    new_name = (new_name or "").strip()
+    if not new_name:
+        return False, "文件夹名称不能为空"
+    for item in items:
+        if isinstance(item, dict) and item.get("id") == target_id:
+            if item.get("type") != "folder":
+                return False, "不是文件夹"
+            item["name"] = new_name
+            return True, "重命名成功"
+        if isinstance(item, dict) and item.get("type") == "folder":
+            kids = item.get("children")
+            if isinstance(kids, list):
+                ok, msg = _rename_folder(kids, target_id, new_name)
                 if ok:
                     return True, msg
     return False, "文件夹不存在"

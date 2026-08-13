@@ -7089,7 +7089,6 @@
   ('statistics',
    'C:\\ldc_zoom\\ml\\Miniconda3\\Lib\\statistics.py',
    'PYMODULE'),
-  ('storage', 'C:\\Users\\ASUS\\Desktop\\ai-mind\\storage.py', 'PYMODULE'),
   ('string', 'C:\\ldc_zoom\\ml\\Miniconda3\\Lib\\string.py', 'PYMODULE'),
   ('stringprep',
    'C:\\ldc_zoom\\ml\\Miniconda3\\Lib\\stringprep.py',

@@ -120,63 +120,100 @@ def get_tree():
     if not isinstance(tree, list):
         tree = []
 
-    # 同步磁盘上的孤立文件到树中
-    existing_ids = set()
-    for item in tree:
-        if isinstance(item, dict) and item.get("type") == "file":
-            existing_ids.add(item.get("id"))
+    # 递归收集所有文件ID（包括嵌套文件夹内的）
+    def _collect_all_file_ids(items):
+        ids = set()
+        for it in items:
+            if isinstance(it, dict):
+                if it.get("type") == "file":
+                    ids.add(it.get("id"))
+                kids = it.get("children")
+                if isinstance(kids, list):
+                    ids |= _collect_all_file_ids(kids)
+        return ids
+    existing_ids = _collect_all_file_ids(tree)
 
+    # 同步磁盘上的孤立文件到树中（真正孤立的才追加到根）
     _ensure_data_dir()
     for fname in os.listdir(DATA_DIR):
         if fname.endswith(".json") and not fname.startswith("_"):
             uid = fname.replace(".json", "")
             if uid not in existing_ids:
                 title = uid
+                created_at = None
+                updated_at = None
                 try:
                     filepath = os.path.join(DATA_DIR, fname)
                     with open(filepath, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     title = _strip_html(data.get("data", {}).get("text", "")) or uid
+                    updated_at = datetime.fromtimestamp(
+                        os.path.getmtime(filepath)
+                    ).isoformat()
+                    created_at = datetime.fromtimestamp(
+                        os.path.getctime(filepath)
+                    ).isoformat()
                 except Exception:
                     pass
-                tree.append({"type": "file", "id": uid, "title": title})
+                entry = {"type": "file", "id": uid, "title": title}
+                if created_at:
+                    entry["created_at"] = created_at
+                if updated_at:
+                    entry["updated_at"] = updated_at
+                tree.append(entry)
 
-    # 更新文件元数据（安全模式，不抛异常）
-    for item in tree:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") != "file":
-            continue
-        try:
-            filepath = os.path.join(DATA_DIR, f"{item['id']}.json")
-            if os.path.exists(filepath):
-                item["updated_at"] = datetime.fromtimestamp(
-                    os.path.getmtime(filepath)
-                ).isoformat()
-                item["created_at"] = datetime.fromtimestamp(
-                    os.path.getctime(filepath)
-                ).isoformat()
-        except Exception:
-            pass
-
-    # 清理死文件（磁盘上不存在的文件条目）
-    def _clean(items):
+    # 递归更新文件元数据 + 清理死文件 + 保证文件夹字段完整性
+    def _clean_and_refresh(items):
         result = []
         for item in items:
             if not isinstance(item, dict):
                 continue
-            if item.get("type") == "file":
-                fpath = os.path.join(DATA_DIR, f"{item.get('id', '')}.json")
+            itype = item.get("type")
+            if itype == "file":
+                fid = item.get("id", "")
+                fpath = os.path.join(DATA_DIR, f"{fid}.json")
                 if not os.path.exists(fpath):
-                    continue
-            elif item.get("type") == "folder":
+                    continue  # 跳过磁盘上不存在的死文件条目
+                # 同步元数据（安全模式，不抛异常）
+                try:
+                    item["updated_at"] = datetime.fromtimestamp(
+                        os.path.getmtime(fpath)
+                    ).isoformat()
+                    item["created_at"] = datetime.fromtimestamp(
+                        os.path.getctime(fpath)
+                    ).isoformat()
+                    # 如果 title 为空，回退到文件内容或 uid
+                    if not item.get("title"):
+                        try:
+                            with open(fpath, "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                            item["title"] = (
+                                _strip_html(data.get("data", {}).get("text", ""))
+                                .strip() or fid
+                            )
+                        except Exception:
+                            item["title"] = fid
+                except Exception:
+                    pass
+                result.append(item)
+            elif itype == "folder":
                 kids = item.get("children")
-                if isinstance(kids, list):
-                    item["children"] = _clean(kids)
-            result.append(item)
+                if not isinstance(kids, list):
+                    kids = []
+                # 递归清理/刷新子项
+                item["children"] = _clean_and_refresh(kids)
+                # 保证字段完整性
+                if "isOpen" not in item:
+                    item["isOpen"] = True
+                if "name" not in item or not item["name"]:
+                    item["name"] = item.get("id", "未命名文件夹")
+                result.append(item)
+            else:
+                # 未知类型条目保留原样（不丢数据）
+                result.append(item)
         return result
 
-    tree = _clean(tree)
+    tree = _clean_and_refresh(tree)
     _save_tree(tree)
     return tree
 

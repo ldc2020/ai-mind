@@ -19,6 +19,23 @@ if getattr(sys, 'frozen', False):
     if os.path.basename(app_dir).lower() == 'dist':
         app_dir = os.path.dirname(app_dir)
     os.chdir(app_dir)
+    # ---------------- 优化：frozen 模式优先从项目目录加载真实 .py 文件 ----------------
+    # 这样以后修改 Python 源码（main.py / storage.py / routes/ 等）就不需要重新打包 exe
+    # 只要磁盘上的 .py 存在，就会被优先 import，覆盖打包内置的旧版本
+    extra_paths = [
+        app_dir,
+        os.path.join(app_dir, 'routes'),
+    ]
+    for p in extra_paths:
+        if os.path.isdir(p) and p not in sys.path:
+            sys.path.insert(0, p)  # 插到最前，优先级高于 exe 内置
+    # 清理已经被 PyInstaller 提前 import 过的旧版本模块，让下一次 import 重新从磁盘加载
+    for _mod_name in list(sys.modules.keys()):
+        if _mod_name in ('main', 'storage') or _mod_name.startswith('routes'):
+            try:
+                del sys.modules[_mod_name]
+            except Exception:
+                pass
 else:
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
