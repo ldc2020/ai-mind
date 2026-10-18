@@ -4,12 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Mind - 思维导图</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20260812f">
-    <link rel="stylesheet" href="/static/js/simpleMindMap.esm.min.css?v=20260812f">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/vendor/simpleMindMap.esm.min.css">
     <!-- 引入 wangEditor CSS -->
-    <link href="/static/css/wangeditor.min.css?v=20260812f" rel="stylesheet">
+    <link href="/static/vendor/wangeditor.min.css" rel="stylesheet">
     <!-- 引入 highlight.js CSS -->
-    <link href="/static/css/highlight.min.css?v=20260812f" rel="stylesheet">
+    <link href="/static/vendor/highlight.min.css" rel="stylesheet">
 </head>
 <body>
     <!-- 顶部工具栏 -->
@@ -198,6 +199,7 @@
         <button class="btn btn-sm" id="btn-settings" title="设置" style="border: none; background: transparent; padding: 2px 6px; cursor: pointer;">⚙️ 设置</button>
         <span id="status-node-count">节点: 0</span>
         <span id="status-layout">逻辑结构图</span>
+        <span id="status-version" style="margin-left:auto" title="当前服务版本"></span>
     </div>
 
     <!-- 文件列表弹出窗 -->
@@ -220,10 +222,11 @@
     <div class="modal-overlay" id="modal-theme" style="display:none">
         <div class="modal modal-sm">
             <div class="modal-header">
-                <span>选择主题</span>
+                <span>导图风格</span>
                 <button class="modal-close" id="modal-theme-close">&times;</button>
             </div>
             <div class="modal-body">
+                <p class="theme-hint">选择连线与节点的整体风格。弧线适用于逻辑结构图、思维导图和垂直时间轴；其他布局保留自身连线规则。</p>
                 <div class="theme-grid" id="theme-grid"></div>
             </div>
         </div>
@@ -416,11 +419,31 @@
     </div>
 
     <!-- 引入 highlight.js -->
-    <script src="/static/js/highlight.min.js?v=20260812f"></script>
+    <script src="/static/vendor/highlight.min.js"></script>
     <!-- 引入 wangEditor -->
-    <script src="/static/js/wangeditor.min.js?v=20260812f"></script>
-    <script src="/static/js/simpleMindMap.umd.min.js?v=20260812f"></script>
-    <script src="/static/js/ai.js?v=20260812f"></script>
-    <script src="/static/js/app.js?v=20260812f"></script>
+    <script src="/static/vendor/wangeditor.min.js"></script>
+    <script src="/static/vendor/simpleMindMap.umd.min.js"></script>
+    <!-- 配置先于业务脚本加载；脚本顺序与 modules.json 一致。 -->
+    <script src="/static/js/config/app-config.js"></script>
+    <script src="/static/js/services/api.js"></script>
+    <script src="/static/js/ai.js"></script>
+    <script src="/static/js/config/prompts.js"></script>
+    <script src="/static/js/core/state.js"></script>
+    <script src="/static/js/features/notes/tooltip.js"></script>
+    <script src="/static/js/features/mindmap/floating-nodes.js"></script>
+    <script src="/static/js/core/editor-state.js"></script>
+    <script src="/static/js/config/catalogs.js"></script>
+    <script src="/static/js/engine/compatibility.js"></script>
+    <script src="/static/js/engine/mindmap.js"></script>
+    <script src="/static/js/features/files/documents.js"></script>
+    <script src="/static/js/features/mindmap/delete.js"></script>
+    <script src="/static/js/features/files/tree.js"></script>
+    <script src="/static/js/features/mindmap/properties.js"></script>
+    <script src="/static/js/features/notes/editor.js"></script>
+    <script src="/static/js/features/mindmap/search.js"></script>
+    <script src="/static/js/features/files/transfer.js"></script>
+    <script src="/static/js/features/mindmap/relations.js"></script>
+    <script src="/static/js/ui/events.js"></script>
+    <script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,12 @@
+{
+  "说明": "原项目本地库原样保留，SHA256 用于固定实际内容；升级库时更新此清单并运行测试。",
+  "sha256": {
+    "highlight.min.js": "837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846",
+    "wangeditor.min.js": "53018e51da532ae6cd45128657b8b82f9f9541ec3cbff20d8a059614ce3ce3c2",
+    "simpleMindMap.umd.min.js": "e51ca5c075f890daface54bed2dad282423fb8af8626903c40344bb91ff3f910",
+    "jszip.min.js": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e",
+    "simpleMindMap.esm.min.css": "03b2e175936dc13438fb9cb5c4562d3183ecd090410c6bfdb81d65e07e28ca0e",
+    "wangeditor.min.css": "844a0952dd8406ecabd0dfbb602612c896a47712ba8abf0a6a17e4fb5940225c",
+    "highlight.min.css": "3a9a5def8b9c311e5ae43abde85c63133185eed4f0d9f67fea4b00a8308cf066"
+  }
+}

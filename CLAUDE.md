@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+> 2026-09 重构说明：以下历史架构描述保留作背景，当前目录、配置与测试约定以 `README.md` 和 `docs/架构与配置.md` 为准。
+> 前端业务已按职责拆到 `static/js/{config,core,engine,features,services,ui}`，本地第三方库在 `static/vendor`。
+> 后端持久化只有 `backend/repository.py` 一份实现，运行参数来自 `config/settings.py`。
+> 使用 `python scripts/test.py` 做隔离回归；不要运行 `tests/legacy` 中会操作默认数据的历史脚本。
+> 新增和修改的代码注释使用中文；新增运行参数应进入统一配置文件。
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview

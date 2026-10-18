@@ -1,17 +1,17 @@
 class AIService {
     constructor() {
-        this.baseUrl = localStorage.getItem('ai_base_url') || 'https://api.openai.com/v1';
-        this.apiKey = localStorage.getItem('ai_api_key') || '';
-        this.model = localStorage.getItem('ai_model') || 'gpt-3.5-turbo';
+        this.baseUrl = localStorage.getItem(APP_CONFIG.storageKeys.aiBaseUrl) || APP_CONFIG.ai.baseUrl;
+        this.apiKey = localStorage.getItem(APP_CONFIG.storageKeys.aiApiKey) || '';
+        this.model = localStorage.getItem(APP_CONFIG.storageKeys.aiModel) || APP_CONFIG.ai.model;
     }
 
     updateConfig(baseUrl, apiKey, model) {
-        this.baseUrl = baseUrl || 'https://api.openai.com/v1';
+        this.baseUrl = baseUrl || APP_CONFIG.ai.baseUrl;
         this.apiKey = apiKey;
-        this.model = model || 'gpt-3.5-turbo';
-        localStorage.setItem('ai_base_url', this.baseUrl);
-        localStorage.setItem('ai_api_key', this.apiKey);
-        localStorage.setItem('ai_model', this.model);
+        this.model = model || APP_CONFIG.ai.model;
+        localStorage.setItem(APP_CONFIG.storageKeys.aiBaseUrl, this.baseUrl);
+        localStorage.setItem(APP_CONFIG.storageKeys.aiApiKey, this.apiKey);
+        localStorage.setItem(APP_CONFIG.storageKeys.aiModel, this.model);
     }
 
     getConfig() {
@@ -42,7 +42,7 @@ class AIService {
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userMessage }
                     ],
-                    temperature: 0.7
+                    temperature: APP_CONFIG.ai.temperature
                 }),
                 signal: signal
             });

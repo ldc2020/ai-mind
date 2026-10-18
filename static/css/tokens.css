@@ -1,0 +1,19 @@
+/* 全局外观配置：颜色、面板宽度、工具栏高度、圆角。修改后刷新页面。 */
+:root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f6f8;
+    --bg-toolbar: #f9f9fb;
+    --border-color: #e8e8ed;
+    --text-primary: #2c2c2e;
+    --text-secondary: #8e8e93;
+    --text-muted: #aeaeb2;
+    --accent: #5b7aff;
+    --accent-hover: #4a6ae8;
+    --accent-light: #eef1ff;
+    --sidebar-width: 240px;
+    --property-width: 240px;
+    --toolbar-height: 44px;
+    --statusbar-height: 28px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08);
+    --radius: 6px;
+}

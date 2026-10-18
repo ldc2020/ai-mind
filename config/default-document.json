@@ -1,0 +1,49 @@
+{
+  "data": {
+    "text": "中心主题",
+    "expand": true
+  },
+  "children": [
+    {
+      "data": {
+        "text": "分支主题1",
+        "expand": true
+      },
+      "children": [
+        {
+          "data": {
+            "text": "子主题1.1"
+          },
+          "children": []
+        },
+        {
+          "data": {
+            "text": "子主题1.2"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "data": {
+        "text": "分支主题2",
+        "expand": true
+      },
+      "children": [
+        {
+          "data": {
+            "text": "子主题2.1"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "data": {
+        "text": "分支主题3",
+        "expand": true
+      },
+      "children": []
+    }
+  ]
+}

@@ -22,7 +22,16 @@ Thumbs.db
 # Debug files
 debug-*.js
 verification*.png
-package-lock.json
 
 # Claude
 .claude/
+
+# 本地配置、安装依赖、测试产物和运行日志
+config/local.json
+node_modules/
+build/
+dist/
+artifacts/*
+!artifacts/legacy/
+logs/
+*.log

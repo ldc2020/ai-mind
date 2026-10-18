@@ -1,0 +1,20 @@
+[
+  "config/prompts.js",
+  "core/state.js",
+  "features/notes/tooltip.js",
+  "features/mindmap/floating-nodes.js",
+  "core/editor-state.js",
+  "config/catalogs.js",
+  "engine/compatibility.js",
+  "engine/mindmap.js",
+  "features/files/documents.js",
+  "features/mindmap/delete.js",
+  "features/files/tree.js",
+  "features/mindmap/properties.js",
+  "features/notes/editor.js",
+  "features/mindmap/search.js",
+  "features/files/transfer.js",
+  "features/mindmap/relations.js",
+  "ui/events.js",
+  "app.js"
+]

@@ -73,3 +73,49 @@ Traceback (most recent call last):
   File "logging\config.py", line 586, in configure
 ValueError: Unable to configure formatter 'default'
 
+Server crash: [Errno 2] No such file or directory: 'C:\\Users\\ASUS\\AppData\\Local\\Temp\\_MEI454682\\config\\defaults.json'
+Traceback (most recent call last):
+  File "launcher.py", line 65, in start_server
+    def enum_windows_callback(hwnd, windows):
+        ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Desktop\ai-mind\main.py", line 9, in <module>
+    from routes.mindmap import router as mindmap_router
+  File "C:\Users\ASUS\Desktop\ai-mind\routes\mindmap.py", line 3, in <module>
+    from backend.repository import (
+    ...<2 lines>...
+    )
+  File "C:\Users\ASUS\Desktop\ai-mind\backend\repository.py", line 9, in <module>
+    from config.settings import settings, default_document_path
+  File "C:\Users\ASUS\Desktop\ai-mind\config\settings.py", line 69, in <module>
+    settings = load_settings()
+  File "C:\Users\ASUS\Desktop\ai-mind\config\settings.py", line 41, in load_settings
+    values = json.loads((PROJECT_ROOT / "config/defaults.json").read_text(encoding="utf-8"))
+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "pathlib\_local.py", line 546, in read_text
+  File "pathlib\_abc.py", line 632, in read_text
+  File "pathlib\_local.py", line 537, in open
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\ASUS\\AppData\\Local\\Temp\\_MEI454682\\config\\defaults.json'
+
+Server crash: [Errno 2] No such file or directory: 'C:\\Users\\ASUS\\AppData\\Local\\Temp\\_MEI598042\\config\\defaults.json'
+Traceback (most recent call last):
+  File "launcher.py", line 65, in start_server
+    def enum_windows_callback(hwnd, windows):
+        ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Desktop\ai-mind\main.py", line 9, in <module>
+    from routes.mindmap import router as mindmap_router
+  File "C:\Users\ASUS\Desktop\ai-mind\routes\mindmap.py", line 3, in <module>
+    from backend.repository import (
+    ...<2 lines>...
+    )
+  File "C:\Users\ASUS\Desktop\ai-mind\backend\repository.py", line 9, in <module>
+    from config.settings import settings, default_document_path
+  File "C:\Users\ASUS\Desktop\ai-mind\config\settings.py", line 69, in <module>
+    settings = load_settings()
+  File "C:\Users\ASUS\Desktop\ai-mind\config\settings.py", line 41, in load_settings
+    values = json.loads((PROJECT_ROOT / "config/defaults.json").read_text(encoding="utf-8"))
+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "pathlib\_local.py", line 546, in read_text
+  File "pathlib\_abc.py", line 632, in read_text
+  File "pathlib\_local.py", line 537, in open
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\ASUS\\AppData\\Local\\Temp\\_MEI598042\\config\\defaults.json'
+

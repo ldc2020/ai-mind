@@ -1,0 +1,12 @@
+{
+  "app_name": "AI Mind",
+  "version": "1.2.0",
+  "host": "127.0.0.1",
+  "port": 8001,
+  "reload": true,
+  "data_dir": "data",
+  "static_dir": "static",
+  "log_dir": "logs",
+  "log_level": "info",
+  "startup_timeout_seconds": 15
+}
